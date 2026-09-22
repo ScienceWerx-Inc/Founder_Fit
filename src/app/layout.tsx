@@ -1,5 +1,5 @@
-import { Analytics } from '@vercel/analytics/react';
 import type { Metadata } from "next";
+import { Analytics } from '@vercel/analytics/react';
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -14,7 +14,6 @@ const ibmPlexMono = IBM_Plex_Mono({
   variable: "--font-ibm-plex-mono",
 });
 
-export const viewport = { width: "device-width", initialScale: 1 };
 export const metadata: Metadata = {
   title: "FounderFit™ — Candidate Assessment Prototype",
   description: "Candidate Assessment Prototype by ScienceWerx",

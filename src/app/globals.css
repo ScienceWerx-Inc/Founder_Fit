@@ -3,14 +3,18 @@
 @tailwind utilities;
 
 * { box-sizing: border-box; margin: 0; }
-html, body { overflow-x: hidden; max-width: 100vw; }
-body { background: #F5F6F2; color: #1C2321; }
+body { 
+  background: #F5F6F2; 
+  color: #1C2321; 
+  /* Add a zoom factor to scale everything up, fixing the "zoomed out" feeling */
+  zoom: 1.15;
+}
 button { font-family: inherit; }
 
 /* Responsive Adjustments */
 @media (max-width: 640px) {
-  .shell-container { padding: 20px 12px !important; max-width: 100vw !important; overflow-x: hidden; }
-  .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; max-width: 100vw !important; }
+  .shell-container { padding: 20px 12px !important; }
+  .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; }
   h1 { font-size: 28px !important; }
   
   /* Aggressively override any inline grids on mobile to single column */
@@ -21,11 +25,9 @@ button { font-family: inherit; }
 
 /* Print Styles for PDF Generation */
 @media print {
-  body { background: #ffffff !important; color: #000000 !important; }
+  body { background: #ffffff !important; color: #000000 !important; zoom: 1; }
   .no-print { display: none !important; }
   .shell-header { display: none !important; }
   .shell-container { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
-  
-  /* Ensure page breaks don't happen inside critical blocks */
   .report-block { break-inside: avoid; }
 }
