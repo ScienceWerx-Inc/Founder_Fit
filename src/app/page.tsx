@@ -1,4 +1,5 @@
 'use client';
+import { saveAssessment } from './actions';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 const CONSTANTS = {
@@ -950,6 +951,15 @@ const CONSTANTS = {
       setNarrative(null);
       setNarrError(null);
       setStep("results");
+      
+      // Save to database
+      saveAssessment(candidateName, asset.name, out.result.ffi, out.result.band, out).then(res => {
+        if (res.success) {
+          console.log("Saved assessment to DB with ID:", res.id);
+        } else {
+          console.error("Error saving assessment:", res.error);
+        }
+      });
     };
     const autofill = () => {
       const s = sampleCandidate();
@@ -1045,7 +1055,27 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
       }
       setNarrLoading(false);
     };
-    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { style: { maxWidth: wide ? 1060 : 760, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 16, letterSpacing: "-0.01em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, verticalAlign: "super" } }, "\u2122")), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx \xB7 algo ", VERSIONS.algo_version, " \xB7 content ", VERSIONS.content_version)), step !== "intro" && step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample \u2192"))), /* @__PURE__ */ React.createElement("div", { style: { maxWidth: wide ? 1060 : 760, margin: "0 auto", padding: "36px 20px 80px" } }, children));
+    const handleBack = () => {
+      if (step === "asset") setStep("intro");
+      else if (step === "context") setStep("asset");
+      else if (step === "fc") {
+        if (idx > 0) setIdx(idx - 1);
+        else setStep("context");
+      }
+      else if (step === "scen") {
+        if (idx > 0) setIdx(idx - 1);
+        else { setStep("fc"); setIdx(FC_BLOCKS.length - 1); }
+      }
+      else if (step === "calib") {
+        if (idx > 0) setIdx(idx - 1);
+        else { setStep("scen"); setIdx(SCENARIOS.length - 1); }
+      }
+      else if (step === "adjacency") {
+        setStep("calib"); setIdx(CALIBRATION.length - 1);
+      }
+      else if (step === "results") setStep("adjacency");
+    };
+    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { className: "shell-header", style: { maxWidth: wide ? 1060 : 760, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 16, letterSpacing: "-0.01em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, verticalAlign: "super" } }, "\u2122")), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx \xB7 algo ", VERSIONS.algo_version, " \xB7 content ", VERSIONS.content_version)), step !== "intro" && /* @__PURE__ */ React.createElement("div", { style: { display: 'flex', gap: '8px' } }, /* @__PURE__ */ React.createElement("button", { onClick: handleBack, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "\u2190 Back"), step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample \u2192")))), /* @__PURE__ */ React.createElement("div", { className: "shell-container", style: { maxWidth: wide ? 1060 : 760, margin: "0 auto", padding: "36px 20px 80px" } }, children));
     if (step === "intro") {
       return shell(
         /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Ticks, null), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Two-sided founder\u2013asset matching"), /* @__PURE__ */ React.createElement("h1", { style: { fontSize: 40, lineHeight: 1.12, fontWeight: 700, letterSpacing: "-0.02em", margin: "14px 0 18px", maxWidth: 640 } }, "Not ", /* @__PURE__ */ React.createElement("em", { style: { fontStyle: "italic", color: T.accent } }, "\u201Cis this person a founder?\u201D"), /* @__PURE__ */ React.createElement("br", null), "but ", /* @__PURE__ */ React.createElement("em", { style: { fontStyle: "italic", color: T.accent } }, "\u201Cis this person the founder for this technology?\u201D")), /* @__PURE__ */ React.createElement("p", { style: { fontSize: 16, lineHeight: 1.65, color: T.mut, maxWidth: 620 } }, "This assessment evaluates a candidate against a specific, already-validated technology asset \u2014 one they did not invent and do not own. The asset's profile determines what the venture demands; the candidate is measured against that demand, not against a general standard. The output identifies talents, development priorities, structural considerations, and \u2014 when it is the honest answer \u2014 misfit for the anchor role."), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, margin: "30px 0" } }, [

@@ -5,3 +5,22 @@
 * { box-sizing: border-box; margin: 0; }
 body { background: #F5F6F2; color: #1C2321; }
 button { font-family: inherit; }
+
+/* Responsive Adjustments */
+@media (max-width: 640px) {
+  .shell-container { padding: 20px 12px !important; }
+  .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; }
+  h1 { font-size: 28px !important; }
+  .grid-cols-responsive { grid-template-columns: 1fr !important; }
+}
+
+/* Print Styles for PDF Generation */
+@media print {
+  body { background: #ffffff !important; color: #000000 !important; }
+  .no-print { display: none !important; }
+  .shell-header { display: none !important; }
+  .shell-container { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+  
+  /* Ensure page breaks don't happen inside critical blocks */
+  .report-block { break-inside: avoid; }
+}
