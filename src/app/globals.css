@@ -3,15 +3,20 @@
 @tailwind utilities;
 
 * { box-sizing: border-box; margin: 0; }
+html, body { overflow-x: hidden; max-width: 100vw; }
 body { background: #F5F6F2; color: #1C2321; }
 button { font-family: inherit; }
 
 /* Responsive Adjustments */
 @media (max-width: 640px) {
-  .shell-container { padding: 20px 12px !important; }
-  .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; }
+  .shell-container { padding: 20px 12px !important; max-width: 100vw !important; overflow-x: hidden; }
+  .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; max-width: 100vw !important; }
   h1 { font-size: 28px !important; }
-  .grid-cols-responsive { grid-template-columns: 1fr !important; }
+  
+  /* Aggressively override any inline grids on mobile to single column */
+  div[style*="grid-template-columns"], div[style*="gridTemplateColumns"] {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 /* Print Styles for PDF Generation */
