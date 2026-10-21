@@ -11,7 +11,7 @@
 - المطلوب:
   - Firestore (client SDK + security rules)
   - Google sign-in gate
-  - API route على السيرفر للـ narrative، والـ key في Secret Manager، والـ narrative يتحفظ في Firestore
+  - API route على السيرفر للـ narrative بـ **Gemini على Vertex AI** (من غير API key، بالـ service account)، والـ narrative يتحفظ في Firestore
   - `apphosting.yaml`
   - تنضيف: Vercel analytics، و Prisma، و agent skills، وسكريبتات الـ py، و `.env`/`dev.db`
 - الأخبار الحلوة: `.env` و `dev.db` مفيهمش أي سر (`dev.db` فاضي، 0 rows)، فمش محتاجين history rewrite.
@@ -65,9 +65,9 @@
 | Database | Prisma 7 + SQLite، والـ setup غالباً مكسور | Firestore Standard edition في `us-central1`، و `users/{uid}/assessments` بالـ client SDK (فيها `context` و `narrative`)، وشيل Prisma كله | M |
 | Auth | مفيش | Firebase Auth بـ Google (`signInWithPopup`)، و `AuthGate`، وزرار sign-out | M |
 | Hosting/Build | Vercel (ضمني) | `apphosting.yaml`، و `engines.node: 22`، و backend في `us-central1` مربوط بـ GitHub، و Blaze plan | S |
-| Env vars & secrets | `.env` committed، ومفيش secrets | `NEXT_PUBLIC_FIREBASE_*` (public)، و `ANTHROPIC_API_KEY` في Secret Manager، و `.env.local` (gitignored) | S |
+| Env vars & secrets | `.env` committed، ومفيش secrets | `NEXT_PUBLIC_FIREBASE_*` (public)، و `GOOGLE_CLOUD_LOCATION`/`GEMINI_MODEL` (مش أسرار)، و `.env.local` (gitignored). **مفيش secrets** (Vertex AI بالـ ADC) | S |
 | Security | server action مفتوحة لأي حد، ومفيش rules | `firestore.rules` owner-only مع `hasOnly`، و ID token verification في الـ narrative route، و cost guard | M |
-| AI narrative call | `fetch` من الـ browser من غير key (`page.tsx:1043`) | API route على السيرفر + `@anthropic-ai/sdk` (`claude-sonnet-4-6`) + verify ID token + حفظ في Firestore | M |
+| AI narrative call | `fetch` من الـ browser من غير key (`page.tsx:1043`) | API route على السيرفر + `@google/genai` (Vertex AI، `gemini-3.5-flash`) + verify ID token + حفظ في Firestore | M |
 | Analytics | `@vercel/analytics` (`layout.tsx:2,31`) | تتشال، ومفيش بديل دلوقتي | S |
 | Code quality/build health | `ignoreBuildErrors` و `ignoreDuringBuilds`، و `page.tsx` 1325 سطر، و 10 سكريبتات py، والـ autofill ظاهر في production | تتمسح السكريبتات، والـ autofill dev-only. بعدين (منفصل) نشيل الـ ignore ونصلّح الـ TS ونقسم الملف | L |
 | Docs | README بيتكلم عن Vercel + Prisma (`README.md:10-16,38-46,56-65`) | README جديد: Firebase setup، و env vars، و deploy | S |
@@ -224,16 +224,16 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
   - Blaze plan (لازم).
   - Next.js 13.5+ (14.2.x LTS، فـ 14.2.35 تمام).
   - Node 22+، والـ runtime لازم يتوافق مع `engines` في `package.json`، وإلا Cloud Build هيفشل.
-- **Region:** **`us-central1`** للـ App Hosting backend و **`us-central1`** (regional، مش multi-region `nam5`) للـ Firestore. كده الـ server والـ DB في نفس المكان، فالـ latency بينهم أقل والـ egress أرخص. الـ Firestore location **مينفعش تتغيّر بعد الإنشاء**.
+- **Region:** **`us-central1`** للـ App Hosting backend، و **`us-central1`** (regional، مش multi-region `nam5`) للـ Firestore، و **`us-central1`** لـ Vertex AI. كده الـ server والـ DB والـ AI في نفس المكان. الـ Firestore location **مينفعش تتغيّر بعد الإنشاء**.
 - **Files جديدة:**
-  - `apphosting.yaml`:
+  - `apphosting.yaml` (**من غير أي secrets**، لأن Vertex AI بيستخدم الـ service account مش API key):
     ```yaml
     runConfig:
       minInstances: 0
       maxInstances: 2        # عشان التكلفة. الـ default 100
     env:
       - variable: NEXT_PUBLIC_FIREBASE_API_KEY
-        value: <from console: Web app config>
+        value: AIzaSyCqPFMzbP8AJsxDEhpgP4dF0n1qTbVV8Y0
         availability: [BUILD, RUNTIME]
       - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
         value: founder-fit-6a455.firebaseapp.com
@@ -241,119 +241,170 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
       - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
         value: founder-fit-6a455
         availability: [BUILD, RUNTIME]
-      - variable: NEXT_PUBLIC_FIREBASE_APP_ID
-        value: <from console: Web app config>
+      - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+        value: founder-fit-6a455.firebasestorage.app
         availability: [BUILD, RUNTIME]
-      - variable: ANTHROPIC_API_KEY
-        secret: anthropic-api-key
+      - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+        value: "455074705484"
+        availability: [BUILD, RUNTIME]
+      - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+        value: 1:455074705484:web:50923e871c7647b67e44e9
+        availability: [BUILD, RUNTIME]
+      # Vertex AI (server-only, مش أسرار)
+      - variable: GOOGLE_CLOUD_LOCATION
+        value: us-central1
+        availability: [RUNTIME]
+      - variable: GEMINI_MODEL
+        value: gemini-3.5-flash
         availability: [RUNTIME]
     ```
-    (الـ region بيتحدد وقت إنشاء الـ backend، مش في الـ yaml.)
-  - `firebase.json`: يشاور على `firestore.rules` و `firestore.indexes.json` (`firebase deploy --only firestore`). App Hosting مش محتاجه لما يكون مربوط بـ GitHub.
+    (الـ region بتاع الـ backend بيتحدد وقت إنشائه، مش في الـ yaml.)
+  - `firebase.json`: يشاور على `firestore.rules` و `firestore.indexes.json`، وفيه إعدادات الـ emulator (port 8085). App Hosting مش محتاجه لما يكون مربوط بـ GitHub.
   - `.firebaserc`: `{ "projects": { "default": "founder-fit-6a455" } }`
   - `firestore.rules` و `firestore.indexes.json` (قسم 4).
-  - `.env.local.example`: نفس الـ `NEXT_PUBLIC_*` + `ANTHROPIC_API_KEY=` للـ dev المحلي.
+  - `.env.local.example`: نفس الـ `NEXT_PUBLIC_*`، و `GOOGLE_CLOUD_LOCATION` و `GEMINI_MODEL` اختياري للـ dev المحلي.
 - **Public vs secret:**
   - الـ `NEXT_PUBLIC_FIREBASE_*` مش أسرار (الحماية جاية من الـ rules)، فعادي تتكتب في `apphosting.yaml` في repo public.
-  - `ANTHROPIC_API_KEY` secret: `firebase apphosting:secrets:set anthropic-api-key --project founder-fit-6a455` (بيعرض يدّي الـ access، وغير كده `firebase apphosting:secrets:grantaccess anthropic-api-key`).
+  - **مفيش أسرار خالص.** الـ route بيكلم Vertex AI بالـ Application Default Credentials (ADC). في App Hosting دي بتبقى الـ runtime service account (`firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com`)، ومحلياً بتبقى حسابك من `gcloud auth application-default login`. يعني مفيش `ANTHROPIC_API_KEY` ولا Secret Manager.
   - App Hosting كمان بيحقن `FIREBASE_CONFIG`، وده اللي الـ Admin SDK بيستخدمه مع `initializeApp()`.
-- **Node:** `"engines": { "node": "22" }` + runtime `nodejs22`. كمان `firebase-admin@14.5.0` نفسه بيطلب `node >=22`.
-- **Build settings:** الـ default (`npm run build`). لازم **نشيل `"postinstall": "prisma generate"`** (`package.json:8`).
+- **Node:** `"engines": { "node": "22" }` + runtime `nodejs22`. كمان `firebase-admin@14.5.0` بيطلب `node >=22`، و `@google/genai` بيطلب Node 20+ (و Node 22+ من v3.0.0).
+- **Build settings:** الـ default (`npm run build`). الـ `postinstall` بتاع Prisma اتشال (خطوة 8).
 - **GitHub:** Console → App Hosting → Create backend → region `us-central1` → Connect GitHub → `ScienceWerx-Inc/Founder_Fit`، root `/`، live branch `main`، automatic rollouts on. ⚠️ الـ repo تبع GitHub org، فممكن تحتاج org admin يوافق على الـ Firebase GitHub app.
-- **Analytics:** مفيش، و `@vercel/analytics` بيتشال بس.
+- **Analytics:** مفيش، و `@vercel/analytics` اتشال.
 - **Custom domain:** مفيش دلوقتي، والأبلكيشن هيبقى على دومين `hosted.app` الافتراضي.
 
-## 7. AI narrative fix
-**المشكلة:** `page.tsx:1043-1047` بيعمل `fetch` من الـ browser لـ `api.anthropic.com` من غير `x-api-key` ولا `anthropic-version`، فالـ request بيترفض والـ UI بيعرض الـ fallback (`page.tsx:1053`). ولو حطينا key في الـ browser هيبقى مكشوف. يعني App Hosting لوحده مش هيحل المشكلة.
+## 7. AI narrative fix (Gemini على Vertex AI)
+**المشكلة:** الكود القديم كان بيعمل `fetch` من الـ browser لـ `api.anthropic.com` من غير key، فكان دايماً بيفشل ويعرض الـ fallback. **القرار الجديد:** الـ narrative هيبقى بـ **Gemini على Vertex AI** (اللي Google بقت تسميه "Gemini Enterprise Agent Platform")، من الـ server route `/api/narrative`، بالـ ADC ومن غير API key.
 
-**اختيار الموديل:** طلبت `claude-sonnet-5-5` لو الـ parameters بتاعته متوافقة مع الـ call بتاعنا. راجعت الـ docs الحالية (https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide):
-- Sonnet 5.5 بيرجّع **400** على "sampling parameters". الـ guide بيقول: "Remove non-default `temperature`, `top_p`, and `top_k` values."
-- والـ call بتاعنا فيه `temperature: 0.3` (`page.tsx:1046`)، وده non-default.
-- كمان thinking بيبقى **on by default** على Sonnet 5.5، وده بيستهلك من `max_tokens`.
+**الـ SDK** (اتراجع في الـ docs والـ types بتاريخ 2026-10-21):
+- الـ package: **`@google/genai`** (Google Gen AI SDK، آخر version **2.30.0**، Node 20+). الـ README بيقول إن الـ SDKs القديمة زي `@google-cloud/vertexai` "previous iterations of this SDK and are no longer receiving new Gemini 2.0+ features". مصدر: https://github.com/googleapis/js-genai
+- الـ init لـ Vertex: **`new GoogleGenAI({ enterprise: true, project, location })`**. الـ types في 2.30.0 بتقول عن `vertexai: true`: "The `enterprise` flag is recommended instead."
+- الـ auth: ADC (الـ README: `gcloud auth application-default login`). مفيش `apiKey` في وضع Vertex.
 
-⇒ **مش متوافق كده، فهنفضل على `claude-sonnet-4-6`** زي ما قلت. (لو حبيت تنقل بعدين: تشيل `temperature`، وتكبّر `max_tokens`، وتحط `output_config.effort`، ودي تغييرات بسيطة.)
+**الموديل:** **`gemini-3.5-flash`**، وممكن نغيّره من غير code عن طريق env var `GEMINI_MODEL`.
+- ⚠️ **Gemini 2.5 (Pro و Flash و Flash-Lite) اتقفل على Vertex AI في 2026-10-20**، يعني مينفعش نستخدمه.
+- `gemini-3.5-flash` **Stable**، والـ shutdown "no earlier than 2027-05-19".
+- `gemini-3.8-flash` أحدث Stable Flash (2026-09-02)، بس معلّم "short-term availability". يعني ممكن يتقفل بعد 45 يوم بس من نزول بديل، وعشان كده اخترنا 3.5 لثبات أطول.
+- مصدر: https://firebase.google.com/docs/ai-logic/models
 
-**الحل:** `src/app/api/narrative/route.ts` (POST، runtime nodejs):
-1. ياخد `Authorization: Bearer <idToken>` (الـ client بيجيبه بـ `await user.getIdToken()`).
-2. `getAuth(adminApp).verifyIdToken(token)`، ولو فشل يرجّع 401. ده بيمنع أي حد بره الأبلكيشن يصرف من رصيد Anthropic.
-3. ياخد في الـ body `{ audience, candidateName, asset_context, result }` بس، مع حد أقصى للحجم (مثلاً 200 KB).
-4. الـ `system` prompt (`page.tsx:996-1027`) والـ user template (`page.tsx:1029-1041`) يتنقلوا لـ `src/lib/narrativePrompt.ts` (server-only).
-5. يستدعي Anthropic SDK:
+**الـ parameters:**
+- **`temperature` و `topP` و `topK`: Gemini 3.x بيتجاهلهم** ("All the general-use Gemini 4.x and Gemini 3.x models will ignore them")، فمش هنبعت `temperature: 0.3` زي الكود القديم.
+- **`maxOutputTokens`: مدعوم**. الـ thinking tokens بتاخد من نفس الحد وبتتحسب بسعر الـ output، فهنحط `4096` عشان نص الـ 700 كلمة (~1000 token) ميتقطعش.
+- **Thinking مينفعش يتقفل** في Gemini 3.x ("You cannot disable or turn off thinking for these models"). هنحط `thinkingConfig: { thinkingLevel: LOW }` عشان نقلل التكلفة والوقت (`LOW` مدعوم في كل موديلات 3.x؛ `MINIMAL` بيرجّع 400 على 3.7 و 3.8).
+- `frequencyPenalty` و `presencePenalty` و `candidateCount` بيرجّعوا 400 على 3.7 و 3.8 Flash، فمش هنبعتهم.
+- مصادر: https://firebase.google.com/docs/ai-logic/model-parameters و https://firebase.google.com/docs/ai-logic/thinking
+
+**الـ route:** `src/app/api/narrative/route.ts` (POST، `runtime = "nodejs"`):
+1. ياخد `Authorization: Bearer <idToken>` (الـ client بيجيبه بـ `await user.getIdToken()`). من غيره → **401**.
+2. `getAuth(adminApp).verifyIdToken(token)`، ولو فشل → **401**. ده بيمنع أي حد بره الأبلكيشن يصرف من فلوس Vertex AI. الـ `verifyIdToken` محتاج الـ project ID بس، ومش محتاج credentials.
+3. الـ body فيه `{ audience, candidateName, asset_context, result }` بس، وحد أقصى **200 KB** → **413** لو أكبر، و **400** لو الـ JSON بايظ أو ناقص.
+4. الـ `system` prompt والـ user template اتنقلوا لـ `src/lib/narrative/prompt.ts` (server-only)، عشان الـ client ميقدرش يغيّر الـ instructions.
+5. يستدعي Gemini:
 ```ts
-import Anthropic from "@anthropic-ai/sdk";
-const anthropic = new Anthropic(); // بيقرا ANTHROPIC_API_KEY (App Hosting secret)
-
-const msg = await anthropic.messages.create({
-  model: "claude-sonnet-4-6",
-  max_tokens: 2000,             // الحالي 1000 ممكن يقطع نص الـ 700 كلمة
-  temperature: 0.3,
-  system,
-  messages: [{ role: "user", content: user }],
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+const ai = new GoogleGenAI({
+  enterprise: true,
+  project: process.env.GOOGLE_CLOUD_PROJECT ?? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  location: process.env.GOOGLE_CLOUD_LOCATION ?? "us-central1",
 });
-if (msg.stop_reason === "refusal") return Response.json({ error: "refused" }, { status: 422 });
-const text = msg.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+const res = await ai.models.generateContent({
+  model: process.env.GEMINI_MODEL ?? "gemini-3.5-flash",
+  contents: user,
+  config: {
+    systemInstruction: system,
+    maxOutputTokens: 4096,
+    thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+  },
+});
+const text = res.text?.trim();
+if (!text) return Response.json({ error: "empty" }, { status: 502 });
 return Response.json({ narrative: text });
 ```
-6. **الحفظ في Firestore:** الـ client (`generateNarrative`، `page.tsx:982`) بينده `/api/narrative`، ولو نجح يعمل:
-   ```ts
-   await updateDoc(doc(db, "users", user.uid, "assessments", savedId),
-                   { narrative: text, updatedAt: serverTimestamp() });
-   ```
-   والـ rules بتسمح بالـ update ده بس.
-- الـ fallback الحالي (deterministic narrative) يفضل زي ما هو لو حصل أي error.
-- Packages جديدة: `@anthropic-ai/sdk` (آخر version 0.137.0) و `firebase-admin` (14.5.0).
-- محلياً: `ANTHROPIC_API_KEY` في `.env.local`، والـ Admin SDK محتاج ADC (`gcloud auth application-default login`) أو `GOOGLE_CLOUD_PROJECT=founder-fit-6a455`، ودي هتتجرّب في خطوتها.
+   أي error من Vertex → **502** برسالة عامة، والتفاصيل في الـ server log بس.
+6. **الحفظ في Firestore:** الـ client (`generateNarrative`) بينده `/api/narrative`، ولو نجح يعمل `updateDoc(..., { narrative, updatedAt: serverTimestamp() })` على `savedId`. الـ rules بتسمح بالـ update ده بس.
+- الـ fallback الحالي (deterministic narrative) يفضل زي ما هو لو حصل أي error (401 أو 413 أو 502 أو network).
+- Packages جديدة: `@google/genai` (2.30.0) و `firebase-admin` (14.5.0).
+
+**الـ APIs اللي لازم تتفعّل في `founder-fit-6a455`:**
+| API | ليه |
+|---|---|
+| `aiplatform.googleapis.com` (Vertex AI / Gemini Enterprise Agent Platform API) | الـ narrative. **ده الجديد.** |
+| `firestore.googleapis.com` | Firestore (بيتفعّل لما الـ database تتعمل) |
+| `identitytoolkit.googleapis.com` | Firebase Auth (اتفعّل لما فعّلت Google sign-in) |
+| `firebaseapphosting.googleapis.com`، `cloudbuild.googleapis.com`، `run.googleapis.com`، `secretmanager.googleapis.com` | App Hosting. ⚠️ عادةً الـ Console بيفعّلهم وانت بتعمل الـ backend، اتأكد في الخطوة دي |
+
+الأمر: `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455`. محتاج `serviceusage.services.enable`، ودي موجودة في Editor.
+
+**الـ IAM roles:**
+| مين | الـ role | ليه | مين يقدر يديه |
+|---|---|---|---|
+| App Hosting runtime SA `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` | **`roles/aiplatform.user`** (Vertex AI User) | الـ route يقدر ينده Gemini. الـ docs بتقول: "you might need to add roles/aiplatform.user or some related role" (https://firebase.google.com/docs/app-hosting/about-app-hosting) | ⚠️ **Owner** (أو حد عنده `resourcemanager.projects.setIamPolicy`). **الـ Editor ميقدرش يدّي IAM roles.** |
+| انت محلياً (حسابك الـ Editor) | `roles/aiplatform.user` | تجرّب الـ narrative الحقيقي من `localhost` | الـ Editor غالباً فيه صلاحيات Vertex AI بالفعل. مش متأكد 100%، ولو طلع 403 اطلب الـ role من الـ Owner |
+| حد | ولا حاجة زيادة لـ `verifyIdToken` | بيستخدم Google public keys | — |
+
+الأمر للـ Owner:
+```
+gcloud projects add-iam-policy-binding founder-fit-6a455 \
+  --member="serviceAccount:firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+الـ service account ده بيتعمل أول مرة App Hosting يتفعّل، فالأمر ده بعد إنشاء الـ backend.
 
 ## 8. Security findings
-1. **`.env` و `dev.db` committed** (من أول commit `709122d`). `.gitignore` فيه `.env*.local` بس.
+1. **`.env` و `dev.db` committed** (من أول commit `709122d`). `.gitignore` كان فيه `.env*.local` بس.
    - `.env` = `DATABASE_URL="file:./dev.db"` بس، ومفيش سر.
    - `dev.db` = schema بس، و **0 rows**.
    - عملت scan على كل الـ git history بـ `sk-ant|api_key|secret|password|AIza`. الـ matches الوحيدة أمثلة documentation جوه `.agents/skills`.
-   - ⇒ **مش محتاجين history cleanup**. كفاية `git rm --cached .env dev.db` + `.gitignore`.
-2. **Server action مفتوحة:** `saveAssessment` (`actions.ts:10`) هي POST endpoint public من غير auth. بتتشال.
-3. **مفيش Anthropic key مكشوف**، والـ key لازم يفضل server-only (من غير `NEXT_PUBLIC_`).
-4. **Cost abuse على الـ narrative route:** فيه auth. وكمان spend limit في Anthropic Console، و budget alert في GCP Billing، و `maxInstances: 2`. والـ per-uid rate limit يتعمل لاحقاً.
-5. **PII:** `candidateName` + إجابات الـ `context` (خبرة، runway مالي، التزامات) + الـ results. الـ rules بتقفلها على صاحبها، ودي data حساسة شوية، فصفحة Phase 2 لازم يبقى فيها delete.
+   - ⇒ **مش محتاجين history cleanup**. اتعمل `git rm --cached` + `.gitignore` في خطوة 1. ✅
+2. **Server action مفتوحة:** `saveAssessment` (`actions.ts`) كانت POST endpoint public من غير auth. اتشالت في خطوة 8. ✅
+3. **مفيش API keys للـ AI خالص:** Vertex AI بيستخدم الـ service account (ADC)، فمفيش key ممكن يتسرّب. الـ `NEXT_PUBLIC_FIREBASE_*` مش أسرار.
+4. **Cost abuse على الـ narrative route:**
+   - `verifyIdToken` (401 من غير token صالح)، وحد للحجم (413).
+   - `maxOutputTokens: 4096` و `thinkingLevel: LOW` بيحطوا سقف لكل call.
+   - `maxInstances: 2`، و budget alert في GCP Billing.
+   - الـ per-uid rate limit يتعمل لاحقاً.
+5. **PII:** `candidateName` + إجابات الـ `context` (خبرة، runway مالي، التزامات) + الـ results. اللي بيتبعت لـ Vertex AI في الـ prompt هو الـ `candidateName` والـ result بس، مش الـ context، والـ data بتفضل جوه نفس الـ Google Cloud project. الـ rules بتقفل الـ docs على صاحبها، وصفحة Phase 2 لازم يبقى فيها delete.
 6. **الـ score بيتحسب في الـ client:** الـ user يقدر يزوّر نتيجته، بس في بياناته هو. مقبول حسب الـ "Prototype note".
 7. **Repo public:** لازم الـ rules تتعمل deploy **قبل** أول استخدام حقيقي، والـ database تتعمل في Production mode.
 8. **`hasOnly` في الـ rules** بيمنع حد يحط fields زيادة (مثلاً `isAdmin`) أو يكبّر الـ doc بـ junk.
 9. **الـ dev tools:** زرار الـ autofill مخفي في production (قسم 5).
-10. **App Check (اختياري، بعدين):** يحمي Firestore و الـ route من scripts بره الأبلكيشن.
+10. **الـ prompt على السيرفر:** الـ client بيبعت data بس، والـ system instructions مش بتيجي منه.
+11. **App Check (اختياري، بعدين):** يحمي Firestore و الـ route من scripts بره الأبلكيشن.
 
 ## 9. File-by-file change list
 **Phase 1 (لحد أول deploy):**
 | Action | File | ليه |
 |---|---|---|
-| Add | `apphosting.yaml` | runConfig + env + secret |
-| Add | `firebase.json` | يشاور على الـ rules والـ indexes |
-| Add | `.firebaserc` | default project `founder-fit-6a455` |
-| Add | `firestore.rules` | owner-only + `hasOnly` + `context` (قسم 4) |
-| Add | `firestore.indexes.json` | exemption لـ `report` من الـ indexing |
-| Add | `.env.local.example` | توثيق الـ env vars المحلية |
-| Add | `src/lib/firebase/client.ts` | init client SDK + auth + db |
+| Add | `apphosting.yaml` | runConfig + env (من غير secrets) |
+| Add | `firebase.json` | الـ rules والـ indexes + الـ emulator ✅ |
+| Add | `.firebaserc` | default project `founder-fit-6a455` ✅ |
+| Add | `firestore.rules` | owner-only + `hasOnly` + `context` (قسم 4) ✅ |
+| Add | `firestore.indexes.json` | exemption لـ `report` من الـ indexing ✅ |
+| Add | `.env.local.example` | توثيق الـ env vars المحلية ✅ |
+| Add | `src/lib/firebase/client.ts` | init client SDK + auth + db (+ emulator اختياري) ✅ |
 | Add | `src/lib/firebase/admin.ts` | Admin SDK (server-only)، لـ `verifyIdToken` |
-| Add | `src/app/AuthGate.tsx` | الـ gate + `useAuth()` + sign-in/out |
-| Add | `src/app/api/narrative/route.ts` | Anthropic من السيرفر (`claude-sonnet-4-6`) |
-| Add | `src/lib/narrativePrompt.ts` | الـ prompts نازلة من `page.tsx` |
+| Add | `src/lib/assessments.ts` | `createAssessment()` ✅ و `saveNarrative()` |
+| Add | `src/app/AuthGate.tsx`، `src/app/theme.ts` | الـ gate + `useAuth()` + sign-in/out، والـ color tokens ✅ |
+| Add | `src/app/api/narrative/route.ts` | Gemini على Vertex AI من السيرفر (`gemini-3.5-flash`) |
+| Add | `src/lib/narrative/prompt.ts` | الـ prompts نازلة من `page.tsx` (server-only) |
+| Add | `src/lib/narrative/handler.ts` | منطق الـ route (auth + validation + Gemini)، مفصول عشان يتختبر بـ mocks |
+| Add | `tests/*.test.mjs` | rules + save ✅ + narrative route |
 | Modify | `src/app/page.tsx` | التفاصيل تحت الجدول |
-| Modify | `src/app/layout.tsx` | تشيل `@vercel/analytics` (السطور 2 و 31) |
-| Modify | `package.json` | `+firebase +firebase-admin +@anthropic-ai/sdk`، و `-@vercel/analytics -prisma -@prisma/client`، وتشيل `postinstall`، وتضيف `engines.node: "22"` |
-| Modify | `package-lock.json` | بيتولّد من npm |
-| Modify | `.gitignore` | `.env`، `*.db`، `.firebase/`، `firebase-debug.log`، وتشيل `/src/generated/prisma` |
-| Modify | `README.md` | Firebase بدل Vercel/Prisma |
-| Delete | `src/app/actions.ts` | Prisma server action |
-| Delete | `prisma/schema.prisma`، `prisma7.config.ts` | Prisma خلاص |
-| Delete | `.agents/`، `.claude/skills/`، `.windsurf/skills/`، `skills-lock.json` | Prisma agent skills، بيتمسحوا مع Prisma |
-| Delete (untrack) | `.env`، `dev.db` | `git rm --cached` |
-| Delete | `fix_*.py` (4)، `patch_*.py` (6) | سكريبتات one-off خلصت |
+| Modify | `src/app/layout.tsx` | تشيل `@vercel/analytics` ✅ |
+| Modify | `package.json` | `+firebase ✅ +firebase-admin +@google/genai`، و `-@vercel/analytics -prisma -@prisma/client ✅`، وتشيل `postinstall` ✅، وتضيف `engines.node: "22"` |
+| Modify | `.gitignore` | `.env`، `*.db`، `.firebase/`، debug logs ✅ |
+| Modify | `README.md` | Firebase + Vertex AI بدل Vercel/Prisma |
+| Delete | `src/app/actions.ts`، `prisma/`، `prisma7.config.ts` | Prisma خلاص ✅ |
+| Delete | `.agents/`، `.claude/skills/`، `.windsurf/skills/`، `skills-lock.json` | Prisma agent skills ✅ |
+| Delete (untrack) | `.env`، `dev.db` | `git rm --cached` ✅ |
+| Delete | `fix_*.py` (4)، `patch_*.py` (6) | سكريبتات one-off خلصت ✅ |
 
 التعديلات في `src/app/page.tsx`:
-- import لـ `AuthGate`/`useAuth` و Firestore.
-- Firestore save فيه `context` بدل `saveAssessment` (956)، و `savedId` state.
-- `generateNarrative` تنده `/api/narrative` وبعدين `updateDoc` (1043).
-- sign-out في `shell` (1078).
-- `SHOW_DEV_TOOLS` على زراير الـ autofill (1078، ~1113).
-- `<AuthGate>` (1323).
+- import لـ `AuthGate`/`useAuth` و Firestore ✅.
+- Firestore save فيه `context` بدل `saveAssessment`، و `savedId` state ✅.
+- الـ autofill بيبعت الـ name والـ context والـ waiver note لـ `finish()` مباشرة ✅.
+- `generateNarrative` تنده `/api/narrative` بالـ ID token، وبعدين `saveNarrative` (updateDoc). الـ prompts بتتشال من الـ client.
+- sign-out في الـ headers ✅، و `SHOW_DEV_TOOLS` على زراير الـ autofill ✅، و `<AuthGate>` ✅.
 
 **Phase 2 (بعد أول deploy ناجح):**
 | Action | File | ليه |
@@ -368,29 +419,29 @@ return Response.json({ narrative: text });
 | Modify/Add | `src/app/page.tsx` → modules | تقسيم الملف |
 
 ## 10. Step-by-step implementation plan
-كل خطوة صغيرة وليها test.
+كل خطوة صغيرة وليها test. (✅ = اتعملت على branch `firebase-migration`)
 
 **Phase 1:**
-0. **Baseline:** `npm ci && npm run build`، ونسجّل النتيجة الحقيقية (ما اتعملتش في التحليل). Test: الـ build بيعدّي، و `git status` نضيف.
-1. **Cleanup:** نمسح سكريبتات الـ py، و `git rm --cached .env dev.db`، ونحدّث `.gitignore`. Test: `npm run build` + `git status`.
-2. **شيل Vercel analytics** من `layout.tsx` و `package.json`. Test: الـ build + الصفحة بتفتح.
-3. **Dev-only autofill:** `SHOW_DEV_TOOLS` على الزرارين. Test: ظاهرين في `npm run dev`، ومخفيين في `npm run build && npm start`.
-4. **Firebase client init:** `npm i firebase`، و `src/lib/firebase/client.ts`، و `.env.local` بالـ config بتاع `founder-fit-6a455`. Test: `npm run dev` من غير errors.
-5. **AuthGate + sign-in/out.** Test: على `localhost:3000`، login بـ Google، و refresh يفضل logged in، و sign-out يرجّعك للـ gate.
-6. **Firestore rules + indexes** + `firebase.json`/`.firebaserc`، وتعمل deploy (`firebase deploy --only firestore --project founder-fit-6a455`، **بموافقتك**). Test: Rules Playground:
-   - owner يعمل create بالـ fields بالظبط → مسموح
-   - create فيه field زيادة → مرفوض (`hasOnly`)
-   - `context` فيه key غير K1–K10 → مرفوض
-   - user تاني يقرا → مرفوض
-   - update لـ `ffiScore` → مرفوض
-7. **Firestore save بدل Prisma** في `finish()`، ومعاه `context`. Test: تخلّص assessment وتلاقي الـ doc في `users/{uid}/assessments`، وفيه `context` و `narrative: null`.
-8. **شيل Prisma + الـ agent skills:** `actions.ts`، و `prisma/`، و `prisma7.config.ts`، والـ deps، و `postinstall`، و `.agents/`، و `.claude/skills/`، و `.windsurf/skills/`، و `skills-lock.json`. Test: `npm ci && npm run build`، و `grep -r prisma src` فاضي.
-9. **Narrative route:** `npm i @anthropic-ai/sdk firebase-admin`، والـ route (`claude-sonnet-4-6`)، والـ prompt module، والـ client call، و `updateDoc`. Test:
-   - محلياً بـ `ANTHROPIC_API_KEY` الـ narrative يطلع
-   - من غير token يرجّع 401
-   - `narrative` يتحدّث في الـ doc
+0. ✅ `6f2ba9e` **Baseline:** `npm ci && npm run build`. Test: الـ build بيعدّي، و `git status` نضيف.
+1. ✅ `10cefd7` **Cleanup:** سكريبتات الـ py، و `git rm --cached .env dev.db`، و `.gitignore`.
+2. ✅ `3330671` **شيل Vercel analytics.**
+3. ✅ `88d83ee` **Dev-only autofill.**
+4. ✅ `07ba5f5` **Firebase client init** (`firebase@13.0.0`).
+5. ✅ `8c3a00c` **AuthGate + sign-in/out** (اتجرّب في الـ browser).
+6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ⏳ **الـ deploy مستني الـ Owner يعمل الـ database** (`firebase deploy --only firestore --project founder-fit-6a455`، **بموافقتك**).
+7. ✅ `fc7787a` **Firestore save بدل Prisma.** Test: real scoring output في الـ emulator. ⏳ الـ end-to-end على الـ database الحقيقية بعد الـ deploy.
+8. ✅ `0ff27e5` **شيل Prisma + الـ agent skills.** Test: `npm ci && npm run build`، و `grep -ri prisma src` فاضي.
+   - ✅ `c647281` **fix:** الـ sample waiver note بيتبعت لـ `finish()`، فـ "Run Sample" بقى بيدّي 67 بدل 0 على الـ sensing asset.
+9. **Narrative route (Vertex AI):** `npm i @google/genai firebase-admin`، والـ route، والـ prompt module، والـ client call، و `saveNarrative`. Test (من غير access حقيقي):
+   - 401 من غير token، و 401 بـ token بايظ
+   - 413 لو الـ body أكبر من 200 KB، و 400 لو الـ body بايظ
+   - 502 + الـ client يعرض الـ fallback لو Gemini فشل
+   - نجاح بـ mock لـ Gemini، ويتأكد من الـ model والـ config
+   - الـ `saveNarrative` في الـ emulator تحت الـ rules الحقيقية
+
+   Test الحقيقي (محلياً): `gcloud auth application-default login` + `aiplatform.googleapis.com` متفعّل (قسم 7).
 10. **`apphosting.yaml` + `engines`.** Test: `npm run build` بـ Node 22.
-11. **App Hosting backend** في `us-central1` (Console، قسم 11) + secret + أول rollout. Test: الـ `hosted.app` URL بيفتح.
+11. **App Hosting backend** في `us-central1` (قسم 11) + **`roles/aiplatform.user` للـ runtime SA** + أول rollout. Test: الـ `hosted.app` URL بيفتح.
 12. **Authorized domain** للـ `hosted.app`، و smoke test كامل: login، assessment، save، narrative، PDF، والـ autofill **مش ظاهر**.
 13. **README.**
 
@@ -400,53 +451,63 @@ return Response.json({ narrative: text });
 
 **بعدين (منفصل، L):**
 
-15. نشيل `ignoreBuildErrors`/`ignoreDuringBuilds` ونصلّح الـ TS/ESLint errors.
+15. نشيل `ignoreBuildErrors`/`ignoreDuringBuilds` ونصلّح الـ TS/ESLint errors (حالياً 210).
 16. نقسم `page.tsx` (constants/scoring/data/components) من غير ما نغيّر السلوك.
 
 ## 11. Firebase Console checklist (بالترتيب)
 1. Project `founder-fit-6a455` → Upgrade لـ **Blaze**، وتعمل **budget alert** في GCP Billing.
-2. Project settings → Your apps → **Add Web app** → تاخد `apiKey` و `appId` (والـ `authDomain` = `founder-fit-6a455.firebaseapp.com`).
-3. Authentication → Get started → Sign-in method → **Google → Enable** + support email.
-4. Firestore Database → Create database → **Standard edition** → Location: **`us-central1`** (Regional، مش multi-region، ومينفعش تتغيّر) → **Production mode**.
-5. (خطوة 6) Deploy للـ rules، وبعدين تراجع tab الـ Rules + Rules Playground.
-6. Anthropic Console: API key مخصوص للمشروع + spend limit.
-7. CLI: `firebase apphosting:secrets:set anthropic-api-key --project founder-fit-6a455`.
-8. App Hosting → **Create backend**: region **`us-central1`**، و GitHub connect (org approval لو مطلوب)، repo `ScienceWerx-Inc/Founder_Fit`، root `/`، branch `main`، auto rollouts، runtime `nodejs22`، تربطه بالـ Web app.
+2. ✅ Project settings → Your apps → **Add Web app** (الـ config اتحط في `.env.local`).
+3. ✅ Authentication → Sign-in method → **Google → Enable**.
+4. ⏳ **(Owner)** Firestore Database → Create database → **Standard edition** → Location: **`us-central1`** (Regional، مش multi-region، ومينفعش تتغيّر) → **Production mode**. الـ Editor ناقصه `datastore.databases.create`.
+5. Deploy للـ rules (`firebase deploy --only firestore`)، وبعدين تراجع tab الـ Rules.
+6. **Vertex AI:** `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455` (أو Console → APIs & Services → Enable "Vertex AI API").
+7. App Hosting → **Create backend**: region **`us-central1`**، و GitHub connect (org approval لو مطلوب)، repo `ScienceWerx-Inc/Founder_Fit`، root `/`، branch `main`، auto rollouts، runtime `nodejs22`، تربطه بالـ Web app.
+8. **(Owner)** IAM → تدّي **`roles/aiplatform.user`** لـ `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` (الأمر في قسم 7). ده بعد خطوة 7 لأن الـ SA بيتعمل مع App Hosting.
 9. بعد أول rollout: تاخد الـ URL (`<backend-id>--founder-fit-6a455.us-central1.hosted.app`) → Authentication → Settings → **Authorized domains → Add**.
 
 ## 12. Risks & open questions
 **قرارات اتاخدت (للتوثيق):**
-- Project `founder-fit-6a455`، والـ region `us-central1` لـ App Hosting و Firestore (Standard، regional).
-- الموديل `claude-sonnet-4-6`، لأن `claude-sonnet-5-5` بيرفض `temperature: 0.3` (قسم 7).
+- Project `founder-fit-6a455`، والـ region `us-central1` لـ App Hosting و Firestore (Standard، regional) و Vertex AI.
+- **الـ narrative بـ Gemini على Vertex AI** (`@google/genai`، `enterprise: true`، الموديل `gemini-3.5-flash` قابل للتغيير بـ `GEMINI_MODEL`)، بالـ ADC ومن غير API key. Anthropic اتشال من الخطة.
 - الـ narrative بيتحفظ، والـ `context` بيتحفظ.
 - "My assessments" في Phase 2.
-- الـ agent skills بتتمسح مع Prisma.
+- الـ agent skills اتمسحت مع Prisma.
 - مفيش analytics ولا custom domain دلوقتي.
 - الـ autofill dev-only.
 - Re-score: كل مرة بتعمل **doc جديد**. كده الـ history بيتحفظ، والـ rules بتفضل strict (الـ update مسموح للـ `narrative` بس).
 - Retention: زرار الـ delete في Phase 2 كفاية دلوقتي.
 
-**Open questions:** مفيش حالياً. هيتحدّث لو ظهر حاجة في خطوة 0 (الـ build).
+**مستني:**
+- الـ **Owner** يعمل الـ Firestore database، ويدّي `roles/aiplatform.user` للـ App Hosting SA (الـ Editor ميقدرش يعمل الاتنين).
 
 **Risks:**
-- `firebase` JS SDK بقى **v13.0.0** (major جديد) وما راجعتش الـ breaking changes بتاعته، فهراجع الـ release notes قبل خطوة 4، أو نثبّت version.
-- الـ build state ما اتأكدش (مشغلتش build)، وإن Prisma مكسور تحليل من الكود بس.
+- ⚠️ **توافر `gemini-3.5-flash` في `us-central1` مش متأكد منه.** الـ docs بتقول الـ locations "depend on the model" وبتنصح بـ `global`، وفيه bug report عن 404 لـ 3.5 Flash في `us-central1` عند project معيّن (https://github.com/cline/cline/issues/11490). لو طلع 404، غيّر `GOOGLE_CLOUD_LOCATION` لـ `global` من غير تعديل في الـ code.
+- الموديلات بتتغيّر بسرعة: Gemini 2.5 اتقفل امبارح (2026-10-20). خلّي `GEMINI_MODEL` في `apphosting.yaml` وراجع https://firebase.google.com/docs/ai-logic/models كل كام شهر.
+- الـ thinking tokens بتتحسب بسعر الـ output ومينفعش تتقفل. `thinkingLevel: LOW` و `maxOutputTokens: 4096` بيحطوا سقف.
+- الـ Editor role غالباً كفاية لتجربة Vertex محلياً، بس مش متأكد. لو 403، محتاج `roles/aiplatform.user`.
 - شكل دومين `hosted.app` بالظبط: اتأكد منه من الكونسول.
-- الـ popup ممكن يتعمله block، فلازم رسالة واضحة لو `auth/popup-blocked`.
-- شيل `ignoreBuildErrors` هيطلّع errors كتير، وعشان كده هو خطوة منفصلة.
-- تكاليف Blaze (Cloud Run + Cloud Build + Firestore) + Anthropic. الـ `maxInstances: 2` والـ budget alerts بيقللوا المخاطرة.
+- الـ popup ممكن يتعمله block، والرسالة الواضحة اتعملت ✅.
+- شيل `ignoreBuildErrors` هيطلّع 210 TS error، وعشان كده هو خطوة منفصلة.
+- تكاليف Blaze: Cloud Run + Cloud Build + Firestore + Vertex AI. الـ `maxInstances: 2` والـ budget alerts بيقللوا المخاطرة.
 - GitHub org permissions ممكن تأخر خطوة 11.
 - الـ rules بتتطلب الـ fields بالظبط، فأي field جديد في الـ code من غير تحديث الـ rules هيخلي الـ save يفشل (`permission-denied`). لازم يتحدّثوا مع بعض.
+- `npm audit`: 17 vulnerability (1 critical) من الـ baseline، لسه ما اتراجعتش.
 
 **مصادر:**
 - https://firebase.google.com/docs/app-hosting/get-started
 - https://firebase.google.com/docs/app-hosting/configure
 - https://firebase.google.com/docs/app-hosting/frameworks-tooling
 - https://firebase.google.com/docs/app-hosting/firebase-sdks
+- https://firebase.google.com/docs/app-hosting/about-app-hosting (الـ runtime SA و `roles/aiplatform.user`)
 - https://firebase.google.com/docs/auth/web/google-signin
 - https://firebase.google.com/docs/auth/web/redirect-best-practices
 - https://firebase.google.com/docs/firestore/quotas
 - https://firebase.google.com/docs/firestore/manage-data/data-types
 - https://firebase.google.com/docs/firestore/security/rules-conditions
-- https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide
-- Package versions اتجابت بـ `npm view` في 2026-10-21: firebase 13.0.0، firebase-admin 14.5.0 (node >=22)، firebase-tools 15.34.0، @anthropic-ai/sdk 0.137.0.
+- https://github.com/googleapis/js-genai (الـ `@google/genai` SDK)
+- https://firebase.google.com/docs/ai-logic/models (الموديلات وتواريخ الـ shutdown)
+- https://firebase.google.com/docs/ai-logic/model-parameters (الـ temperature بيتجاهل، والـ maxOutputTokens)
+- https://firebase.google.com/docs/ai-logic/thinking (thinking levels)
+- https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions و https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations (الـ tool ما قدرش يقرا الـ tables بتاعتهم، فراجعهم بنفسك)
+- https://firebase.google.com/codelabs/ai-genkit-rag (أمر الـ `add-iam-policy-binding` للـ `firebase-app-hosting-compute` SA)
+- Package versions اتجابت بـ `npm view` في 2026-10-21: firebase 13.0.0، firebase-admin 14.5.0 (node >=22)، @google/genai 2.30.0 (node >=20)، firebase-tools 15.34.0.
