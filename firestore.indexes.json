@@ -1,0 +1,10 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "assessments",
+      "fieldPath": "report",
+      "indexes": []
+    }
+  ]
+}

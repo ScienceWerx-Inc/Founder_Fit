@@ -7,7 +7,8 @@
     "build": "next build",
     "postinstall": "prisma generate",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --test tests/firestore.rules.test.mjs\""
   },
   "dependencies": {
     "firebase": "^13.0.0",
@@ -16,6 +17,7 @@
     "react-dom": "^18"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@prisma/client": "^7.10.0",
     "@types/node": "^20",
     "@types/react": "^18",
