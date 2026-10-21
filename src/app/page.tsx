@@ -919,16 +919,17 @@ const CONSTANTS = {
       const latency_ms = Date.now() - mountTime.current;
       setLatencies((prev) => [...prev, { item_code, section, latency_ms }]);
     };
-    const finish = (adjOverride, extra: { fc?: any; sc?: any; cal?: any; lat?: any; name?: string; ctx?: Record<string, string> } = {}) => {
+    const finish = (adjOverride, extra: { fc?: any; sc?: any; cal?: any; lat?: any; name?: string; ctx?: Record<string, string>; waiver?: string } = {}) => {
       const assessment = {
         forcedChoice: FC_BLOCKS.map((b) => ({ block: b.code, ...(extra.fc ?? fcAnswers)[b.code] })).filter((r) => r.most && r.least && r.most !== r.least),
         scenarios: SCENARIOS.map((s) => ({ code: s.code, choice: (extra.sc ?? scAnswers)[s.code] })).filter((r) => r.choice),
         calibration: CALIBRATION.map((c) => ({ code: c.code, value: (extra.cal ?? calAnswers)[c.code] })).filter((r) => r.value !== void 0),
         latencies: extra.lat ?? latencies
       };
+      const waiver = (extra.waiver ?? waiverNote).trim();
       const attestations = {
         ip_conflict_reviewed: ipGateActive ? ipReviewed : void 0,
-        waivers: buyerGateActive && waiverNote.trim() ? [{ gate_code: "GATE_BUYER_ACCESS", note: waiverNote.trim() }] : []
+        waivers: buyerGateActive && waiver ? [{ gate_code: "GATE_BUYER_ACCESS", note: waiver }] : []
       };
       const out = runScoring({ asset: assetScores, assessment, adjacency: { scores: adjOverride ?? adjScores }, attestations });
       setOutput(out);
@@ -968,9 +969,10 @@ const CONSTANTS = {
       setCalAnswers(cal);
       setLatencies(s.latencies);
       setAdjScores(s.adjacency);
-      setWaiverNote(buyerGateActive ? "Commercial co-founder identified: former VP Ops at a target operator, with current decision-maker access." : "");
+      const waiver = buyerGateActive ? "Commercial co-founder identified: former VP Ops at a target operator, with current decision-maker access." : "";
+      setWaiverNote(waiver);
       // State setters above apply on the next render, so pass the sample values to finish() directly.
-      finish(s.adjacency, { fc, sc, cal, lat: s.latencies, name, ctx: s.context });
+      finish(s.adjacency, { fc, sc, cal, lat: s.latencies, name, ctx: s.context, waiver });
     };
     const generateNarrative = async () => {
       if (!output) return;
