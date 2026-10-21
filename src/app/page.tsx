@@ -1,7 +1,8 @@
 'use client';
-import { saveAssessment } from './actions';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AuthGate, useAuth } from './AuthGate';
+import { db } from '@/lib/firebase/client';
+import { createAssessment } from '@/lib/assessments';
 import { T } from './theme';
 
 const CONSTANTS = {
@@ -846,6 +847,7 @@ const CONSTANTS = {
     const [idx, setIdx] = useState(0);
     const [latencies, setLatencies] = useState([]);
     const [output, setOutput] = useState(null);
+    const [savedId, setSavedId] = useState<string | null>(null); // Firestore id of the latest saved assessment (narrative is attached to it in step 9)
     const [audience, setAudience] = useState("decision_maker");
     const [narrative, setNarrative] = useState(null);
     const [narrLoading, setNarrLoading] = useState(false);
@@ -917,7 +919,7 @@ const CONSTANTS = {
       const latency_ms = Date.now() - mountTime.current;
       setLatencies((prev) => [...prev, { item_code, section, latency_ms }]);
     };
-    const finish = (adjOverride, extra = {}) => {
+    const finish = (adjOverride, extra: { fc?: any; sc?: any; cal?: any; lat?: any; name?: string; ctx?: Record<string, string> } = {}) => {
       const assessment = {
         forcedChoice: FC_BLOCKS.map((b) => ({ block: b.code, ...(extra.fc ?? fcAnswers)[b.code] })).filter((r) => r.most && r.least && r.most !== r.least),
         scenarios: SCENARIOS.map((s) => ({ code: s.code, choice: (extra.sc ?? scAnswers)[s.code] })).filter((r) => r.choice),
@@ -933,19 +935,27 @@ const CONSTANTS = {
       setNarrative(null);
       setNarrError(null);
       setStep("results");
-      
-      // Save to database
-      saveAssessment(candidateName, asset.name, out.result.ffi, out.result.band, out).then(res => {
-        if (res.success) {
-          console.log("Saved assessment to DB with ID:", res.id);
-        } else {
-          console.error("Error saving assessment:", res.error);
-        }
+
+      // Save to Firestore; every finish (including re-score) creates a new doc.
+      setSavedId(null);
+      createAssessment(db, user.uid, {
+        candidateName: extra.name ?? candidateName,
+        assetId,
+        assetName: asset.name,
+        context: extra.ctx ?? context,
+        versions: VERSIONS,
+        output: out
+      }).then((id) => {
+        setSavedId(id);
+        console.log("Saved assessment to Firestore with ID:", id);
+      }).catch((e) => {
+        console.error("Error saving assessment:", e);
       });
     };
     const autofill = () => {
       const s = sampleCandidate();
-      setCandidateName(candidateName || "Sample Candidate");
+      const name = candidateName || "Sample Candidate";
+      setCandidateName(name);
       setContext(s.context);
       const fc = {};
       for (const r of s.forcedChoice) fc[r.block] = { most: r.most, least: r.least };
@@ -959,7 +969,8 @@ const CONSTANTS = {
       setLatencies(s.latencies);
       setAdjScores(s.adjacency);
       setWaiverNote(buyerGateActive ? "Commercial co-founder identified: former VP Ops at a target operator, with current decision-maker access." : "");
-      finish(s.adjacency, { fc, sc, cal, lat: s.latencies });
+      // State setters above apply on the next render, so pass the sample values to finish() directly.
+      finish(s.adjacency, { fc, sc, cal, lat: s.latencies, name, ctx: s.context });
     };
     const generateNarrative = async () => {
       if (!output) return;

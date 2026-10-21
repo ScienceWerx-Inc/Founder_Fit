@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
 
 // Each NEXT_PUBLIC_* var must be referenced literally so Next.js can inline it into the browser bundle.
 const firebaseConfig: FirebaseOptions = {
@@ -23,3 +23,12 @@ if (missing.length > 0) {
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Optional local testing: point Firestore at the emulator (e.g. 127.0.0.1:8085). Never set this in production.
+const emulatorHost = process.env.NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST;
+const globalForEmulator = globalThis as unknown as { __ffFirestoreEmulator?: boolean };
+if (emulatorHost && process.env.NODE_ENV !== "production" && !globalForEmulator.__ffFirestoreEmulator) {
+  const [host, port] = emulatorHost.split(":");
+  connectFirestoreEmulator(db, host, Number(port));
+  globalForEmulator.__ffFirestoreEmulator = true; // connecting twice throws after hot reloads
+}

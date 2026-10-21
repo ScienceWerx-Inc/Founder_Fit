@@ -1,4 +1,4 @@
-// Firestore security rules tests. Run with: npm run test:rules (needs Java + firebase-tools).
+// Firestore security rules tests. Run with: npm run test:firestore (needs Java + firebase-tools).
 import { after, before, beforeEach, describe, test } from "node:test";
 import { readFileSync } from "node:fs";
 import { assertFails, assertSucceeds, initializeTestEnvironment } from "@firebase/rules-unit-testing";
