@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "test:firestore": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --experimental-strip-types --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/save-assessment.test.mjs\""
@@ -18,14 +17,12 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^6.0.0",
-    "@prisma/client": "^7.10.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",
     "eslint-config-next": "14.2.35",
     "postcss": "^8",
-    "prisma": "^7.10.0",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"
   }

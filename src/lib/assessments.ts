@@ -16,7 +16,7 @@ export type NewAssessment = {
 };
 
 // Firestore rejects undefined values; a JSON round-trip drops them and turns NaN/Infinity into null,
-// which is exactly what the previous Prisma save stored (JSON.stringify).
+// matching how reports were stored before (as a JSON.stringify'd string).
 function toFirestoreData<V>(value: V): V {
   return JSON.parse(JSON.stringify(value));
 }
