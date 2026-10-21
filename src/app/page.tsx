@@ -1,6 +1,8 @@
 'use client';
 import { saveAssessment } from './actions';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { AuthGate, useAuth } from './AuthGate';
+import { T } from './theme';
 
 const CONSTANTS = {
     BASE_MATCH: 88,
@@ -758,29 +760,6 @@ const CONSTANTS = {
       adjacency: { J1: 3, J2: 2, J3: 3, J4: 4, J5: 4 }
     };
   }
-  const T = {
-    paper: "#F5F6F2",
-    surface: "#FFFFFF",
-    ink: "#171B21",
-    mut: "#5B6371",
-    line: "#E1E4DC",
-    lineDark: "#C9CDC3",
-    accent: "#0E6B54",
-    accentSoft: "#E3EFEA",
-    amber: "#9A5B00",
-    amberSoft: "#F5EAD6",
-    red: "#A6271C",
-    redSoft: "#F6E3E0",
-    plum: "#5B4FC7",
-    plumSoft: "#ECEAF9",
-    dark: "#12161C",
-    darkLine: "#2A313B",
-    consoleCard: "#1A2027",
-    consoleText: "#E8EBE6",
-    consoleMut: "#8B94A1",
-    most: "#2FBE8F",
-    least: "#D9822B"
-  };
   const BAND_LABELS = {
     anchor: "Anchor Founder",
     anchor_with_complement: "Anchor with Complement",
@@ -852,6 +831,7 @@ const CONSTANTS = {
     return /* @__PURE__ */ React.createElement("div", { style: { position: "relative", height: 20, background: "#EDEFE9", borderRadius: 3, overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, borderRadius: 3, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", left: 0, top: 0, bottom: 0, width: `${percentile}%`, background: barColor, opacity: 0.85, borderRadius: 3 } })), /* @__PURE__ */ React.createElement("div", { title: `demand ${demand}`, style: { position: "absolute", left: `${demand}%`, top: -4, bottom: -4, width: 2, background: T.ink } }));
   }
   function FounderFitAssessment() {
+    const { user, signOut } = useAuth();
     const [step, setStep] = useState("intro");
     const [assetId, setAssetId] = useState(PRESET_ASSETS[0].id);
     const [assetScores, setAssetScores] = useState({ ...PRESET_ASSETS[0].scores });
@@ -1077,7 +1057,9 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
       }
       else if (step === "results") setStep("adjacency");
     };
-    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { className: "shell-header no-print", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("a", { href: "/", style: { textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("svg", { width: "24", height: "24", viewBox: "0 0 32 32", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, /* @__PURE__ */ React.createElement("rect", { width: "32", height: "32", rx: "8", fill: "#1C2321" }), /* @__PURE__ */ React.createElement("path", { d: "M10 22V10L16 16L22 10V22", stroke: "#F5F6F2", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "16", cy: "8", r: "2", fill: "#C55233" })), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 20, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, verticalAlign: "super", color: T.mut, marginLeft: 2 } }, "™"))), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx · algo ", VERSIONS.algo_version, " · content ", VERSIONS.content_version)), step !== "intro" && /* @__PURE__ */ React.createElement("div", { style: { display: 'flex', gap: '8px' } }, /* @__PURE__ */ React.createElement("button", { onClick: handleBack, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "← Back"), SHOW_DEV_TOOLS && step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample →"), step === "results" && /* @__PURE__ */ React.createElement("button", { onClick: () => window.print(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.ink, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "↓ Save PDF")))), /* @__PURE__ */ React.createElement("div", { className: "shell-container", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "36px 20px 80px" } }, children));
+    // Signed-in email + Sign out, shared by the intro header and the shell() header.
+    const userMenu = /* @__PURE__ */ React.createElement("div", { className: "no-print user-menu", style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { className: "no-print user-email", title: user.email ?? "", style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, user.email), /* @__PURE__ */ React.createElement("button", { className: "no-print", onClick: () => signOut(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" } }, "Sign out"));
+    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { className: "shell-header no-print", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("a", { href: "/", style: { textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("svg", { width: "24", height: "24", viewBox: "0 0 32 32", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, /* @__PURE__ */ React.createElement("rect", { width: "32", height: "32", rx: "8", fill: "#1C2321" }), /* @__PURE__ */ React.createElement("path", { d: "M10 22V10L16 16L22 10V22", stroke: "#F5F6F2", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "16", cy: "8", r: "2", fill: "#C55233" })), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 20, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, verticalAlign: "super", color: T.mut, marginLeft: 2 } }, "™"))), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx · algo ", VERSIONS.algo_version, " · content ", VERSIONS.content_version)), /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" } }, userMenu, step !== "intro" && /* @__PURE__ */ React.createElement("div", { style: { display: 'flex', gap: '8px' } }, /* @__PURE__ */ React.createElement("button", { onClick: handleBack, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "← Back"), SHOW_DEV_TOOLS && step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample →"), step === "results" && /* @__PURE__ */ React.createElement("button", { onClick: () => window.print(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.ink, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "↓ Save PDF"))))), /* @__PURE__ */ React.createElement("div", { className: "shell-container", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "36px 20px 80px" } }, children));
     if (step === "intro") {
       return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif", display: "flex", flexDirection: "column" } }, 
         /* @__PURE__ */ React.createElement("div", { className: "shell-header", style: { padding: "16px 40px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${T.line}`, background: T.surface } },
@@ -1089,7 +1071,10 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
              ),
              /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 24, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, verticalAlign: "super", color: T.mut, marginLeft: 4 } }, "™"))
           ),
-          /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: T.mut } }, "ScienceWerx")
+          /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", justifyContent: "flex-end" } },
+            /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: T.mut } }, "ScienceWerx"),
+            userMenu
+          )
         ),
         /* @__PURE__ */ React.createElement("main", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 20px", textAlign: "center" } },
           /* @__PURE__ */ React.createElement("div", { style: { display: "inline-block", padding: "6px 14px", border: `1px solid ${T.accent}40`, borderRadius: 20, color: T.accent, fontWeight: 600, fontSize: 13, marginBottom: 24, fontFamily: "'IBM Plex Mono', monospace" } }, "v2.0 — Two-Sided Matching Engine"),
@@ -1323,5 +1308,9 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
   }
 
 export default function Page() {
-  return <FounderFitAssessment />;
+  return (
+    <AuthGate>
+      <FounderFitAssessment />
+    </AuthGate>
+  );
 }
