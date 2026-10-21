@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { assertFails, initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { addDoc, collection, doc, getDoc, Timestamp } from "firebase/firestore";
-import { createAssessment } from "../src/lib/assessments.ts";
+import { createAssessment, saveNarrative } from "../src/lib/assessments.ts";
 
 // page.tsx can't export its scoring code (Next.js pages only export the page), so compile that region for the test.
 async function loadScoring() {
@@ -132,5 +132,39 @@ describe("createAssessment with real scoring output", () => {
     await assertFails(createAssessment(asAlice(), "bob", {
       candidateName: "x", assetId: "sensing", assetName: "x", context: s.context, versions: S.VERSIONS, output: out,
     }));
+  });
+});
+
+describe("saveNarrative", () => {
+  async function savedSample(db) {
+    const { s, out } = scoreSample(S.PRESET_ASSETS[0], { attested: true });
+    return createAssessment(db, "alice", {
+      candidateName: "Sample Candidate", assetId: S.PRESET_ASSETS[0].id, assetName: S.PRESET_ASSETS[0].name,
+      context: s.context, versions: S.VERSIONS, output: out,
+    });
+  }
+
+  test("attaches the narrative to the owner's saved assessment and bumps updatedAt", async () => {
+    const db = asAlice();
+    const id = await savedSample(db);
+    const before = (await getDoc(doc(db, "users", "alice", "assessments", id))).data();
+    await saveNarrative(db, "alice", id, "Executive Summary\nThe candidate ...");
+    const after = (await getDoc(doc(db, "users", "alice", "assessments", id))).data();
+    assert.equal(after.narrative, "Executive Summary\nThe candidate ...");
+    assert.ok(after.updatedAt.toMillis() >= before.updatedAt.toMillis());
+    assert.equal(after.ffiScore, before.ffiScore);
+    assert.deepEqual(after.report, before.report);
+  });
+
+  test("narratives longer than the rules allow are cut to 20000 characters", async () => {
+    const db = asAlice();
+    const id = await savedSample(db);
+    await saveNarrative(db, "alice", id, "z".repeat(25000));
+    assert.equal((await getDoc(doc(db, "users", "alice", "assessments", id))).data().narrative.length, 20000);
+  });
+
+  test("another user cannot attach a narrative", async () => {
+    const id = await savedSample(asAlice());
+    await assertFails(saveNarrative(env.authenticatedContext("bob").firestore(), "alice", id, "x"));
   });
 });

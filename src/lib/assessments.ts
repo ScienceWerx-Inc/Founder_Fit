@@ -1,9 +1,10 @@
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, doc, serverTimestamp, updateDoc } from "firebase/firestore";
 import type { Firestore } from "firebase/firestore";
 
 // Bump together with assessmentFields() in firestore.rules whenever the doc shape changes.
 export const ASSESSMENT_SCHEMA_VERSION = 1;
 const MAX_CANDIDATE_NAME = 200; // matches firestore.rules
+const MAX_NARRATIVE = 20000; // matches firestore.rules
 
 export type NewAssessment = {
   candidateName: string;
@@ -40,4 +41,12 @@ export async function createAssessment(db: Firestore, uid: string, a: NewAssessm
     updatedAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+/** Attaches the generated narrative to a saved assessment (the only update the rules allow). */
+export async function saveNarrative(db: Firestore, uid: string, assessmentId: string, narrative: string): Promise<void> {
+  await updateDoc(doc(db, "users", uid, "assessments", assessmentId), {
+    narrative: narrative.slice(0, MAX_NARRATIVE),
+    updatedAt: serverTimestamp(),
+  });
 }

@@ -7,10 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:firestore": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --experimental-strip-types --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/save-assessment.test.mjs\""
+    "test": "node --experimental-strip-types --experimental-test-module-mocks --import ./tests/support/register-ts.mjs --test tests/narrative-route.test.mjs",
+    "test:firestore": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --experimental-strip-types --import ./tests/support/register-ts.mjs --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/save-assessment.test.mjs\""
   },
   "dependencies": {
+    "@google/genai": "^2.30.0",
     "firebase": "^13.0.0",
+    "firebase-admin": "^14.5.0",
     "next": "14.2.35",
     "react": "^18",
     "react-dom": "^18"
