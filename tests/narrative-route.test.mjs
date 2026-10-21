@@ -1,7 +1,9 @@
-// /api/narrative handler and Gemini request shape, with Firebase Admin and Vertex AI mocked (no network).
+// /api/narrative handler and Gemini request shape (Vertex AI and Developer API modes), with Firebase Admin and the SDK mocked (no network).
 // Run with: npm test
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { MAX_BODY_BYTES, handleNarrativeRequest } from "../src/lib/narrative/handler.ts";
 import { NARRATIVE_SYSTEM_PROMPT } from "../src/lib/narrative/prompt.ts";
 import { verifyFirebaseIdToken } from "../src/lib/firebase/admin.ts";
@@ -133,18 +135,16 @@ describe("generation", () => {
 });
 
 describe("Gemini request (SDK mocked)", () => {
-  test("uses Vertex AI (enterprise), the configured project/location/model, and Gemini 3.x-safe config", async (t) => {
+  const GEMINI_ENV = ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GEMINI_MODEL", "NODE_ENV"];
+
+  // Loads a fresh gemini.ts against a fake SDK with exactly the given env; returns what the SDK saw.
+  async function loadGemini(t, env, response = { text: "Narrative text" }) {
     const constructed = [];
     const calls = [];
     class FakeGoogleGenAI {
       constructor(opts) {
         constructed.push(opts);
-        this.models = {
-          generateContent: async (req) => {
-            calls.push(req);
-            return { text: "Narrative text" };
-          },
-        };
+        this.models = { generateContent: async (req) => (calls.push(req), response) };
       }
     }
     t.mock.module("@google/genai", {
@@ -154,19 +154,13 @@ describe("Gemini request (SDK mocked)", () => {
     t.after(() => {
       process.env = saved;
     });
-    delete process.env.GOOGLE_CLOUD_PROJECT;
-    delete process.env.GOOGLE_CLOUD_LOCATION;
-    delete process.env.GEMINI_MODEL;
-    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = "founder-fit-6a455";
+    for (const k of GEMINI_ENV) delete process.env[k];
+    Object.assign(process.env, { NEXT_PUBLIC_FIREBASE_PROJECT_ID: "founder-fit-6a455" }, env);
+    const mod = await import(`../src/lib/narrative/gemini.ts?v=${Math.random()}`);
+    return { mod, constructed, calls };
+  }
 
-    const { generateWithGemini, DEFAULT_GEMINI_MODEL } = await import(`../src/lib/narrative/gemini.ts?v=${Date.now()}`);
-    const text = await generateWithGemini("SYSTEM", "USER");
-
-    assert.equal(text, "Narrative text");
-    assert.deepEqual(constructed, [{ enterprise: true, project: "founder-fit-6a455", location: "us-central1" }]);
-    assert.equal(DEFAULT_GEMINI_MODEL, "gemini-3.5-flash");
-    const req = calls[0];
-    assert.equal(req.model, "gemini-3.5-flash");
+  function assertSafeConfig(req) {
     assert.equal(req.contents, "USER");
     assert.equal(req.config.systemInstruction, "SYSTEM");
     assert.equal(req.config.maxOutputTokens, 4096);
@@ -174,38 +168,91 @@ describe("Gemini request (SDK mocked)", () => {
     for (const ignoredOrRejected of ["temperature", "topP", "topK", "frequencyPenalty", "presencePenalty", "candidateCount"]) {
       assert.ok(!(ignoredOrRejected in req.config), `${ignoredOrRejected} should not be sent`);
     }
+  }
+
+  test("Vertex AI mode (no GEMINI_API_KEY): enterprise, project, us-central1, default model, no API key", async (t) => {
+    const { mod, constructed, calls } = await loadGemini(t, {});
+    assert.equal(mod.geminiBackend(), "vertex-ai");
+    assert.equal(await mod.generateWithGemini("SYSTEM", "USER"), "Narrative text");
+    assert.deepEqual(constructed, [{ enterprise: true, project: "founder-fit-6a455", location: "us-central1" }]);
+    assert.ok(!("apiKey" in constructed[0]));
+    assert.equal(mod.DEFAULT_GEMINI_MODEL, "gemini-3.5-flash");
+    assert.equal(calls[0].model, "gemini-3.5-flash");
+    assertSafeConfig(calls[0]);
   });
 
-  test("model and location come from GEMINI_MODEL / GOOGLE_CLOUD_LOCATION when set", async (t) => {
-    const constructed = [];
-    const calls = [];
-    class FakeGoogleGenAI {
-      constructor(opts) {
-        constructed.push(opts);
-        this.models = { generateContent: async (req) => (calls.push(req), { text: "ok" }) };
-      }
-    }
-    t.mock.module("@google/genai", { namedExports: { GoogleGenAI: FakeGoogleGenAI, ThinkingLevel: { LOW: "LOW" } } });
-    const saved = { ...process.env };
-    t.after(() => {
-      process.env = saved;
-    });
-    Object.assign(process.env, { GOOGLE_CLOUD_PROJECT: "other-project", GOOGLE_CLOUD_LOCATION: "global", GEMINI_MODEL: "gemini-3.8-flash" });
+  test("Developer API mode (GEMINI_API_KEY set in dev): apiKey only, no project/location, same request", async (t) => {
+    const { mod, constructed, calls } = await loadGemini(t, { GEMINI_API_KEY: "test-key-123", NODE_ENV: "development" });
+    assert.equal(mod.geminiBackend(), "developer-api");
+    assert.equal(await mod.generateWithGemini("SYSTEM", "USER"), "Narrative text");
+    assert.deepEqual(constructed, [{ enterprise: false, apiKey: "test-key-123" }]);
+    assert.equal(calls[0].model, "gemini-3.5-flash");
+    assertSafeConfig(calls[0]);
+  });
 
-    const { generateWithGemini } = await import(`../src/lib/narrative/gemini.ts?v=${Date.now()}-env`);
-    await generateWithGemini("S", "U");
+  test("GEMINI_API_KEY is ignored in production: Vertex AI is used and a warning is logged", async (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const { mod, constructed } = await loadGemini(t, { GEMINI_API_KEY: "leaked-key", NODE_ENV: "production" });
+    assert.equal(mod.geminiBackend(), "vertex-ai");
+    await mod.generateWithGemini("SYSTEM", "USER");
+    assert.deepEqual(constructed, [{ enterprise: true, project: "founder-fit-6a455", location: "us-central1" }]);
+    assert.ok(!JSON.stringify(constructed).includes("leaked-key"));
+    assert.equal(warn.mock.callCount(), 1);
+  });
+
+  test("an empty GEMINI_API_KEY (as in .env.local.example) means Vertex AI", async (t) => {
+    const { mod, constructed } = await loadGemini(t, { GEMINI_API_KEY: "" });
+    assert.equal(mod.geminiBackend(), "vertex-ai");
+    await mod.generateWithGemini("SYSTEM", "USER");
+    assert.equal(constructed[0].enterprise, true);
+  });
+
+  test("Vertex AI mode: model, project and location come from GEMINI_MODEL / GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION", async (t) => {
+    const { mod, constructed, calls } = await loadGemini(t, { GOOGLE_CLOUD_PROJECT: "other-project", GOOGLE_CLOUD_LOCATION: "global", GEMINI_MODEL: "gemini-3.8-flash" });
+    await mod.generateWithGemini("S", "U");
     assert.deepEqual(constructed[0], { enterprise: true, project: "other-project", location: "global" });
     assert.equal(calls[0].model, "gemini-3.8-flash");
   });
 
+  test("Developer API mode: GEMINI_MODEL applies, and project/location env vars are not passed", async (t) => {
+    const { mod, constructed, calls } = await loadGemini(t, { GEMINI_API_KEY: "k", GEMINI_MODEL: "gemini-3.8-flash", GOOGLE_CLOUD_PROJECT: "p", GOOGLE_CLOUD_LOCATION: "global" });
+    await mod.generateWithGemini("S", "U");
+    assert.deepEqual(constructed[0], { enterprise: false, apiKey: "k" });
+    assert.equal(calls[0].model, "gemini-3.8-flash");
+  });
+
+  test("the client is created once and reused across calls", async (t) => {
+    const { mod, constructed } = await loadGemini(t, {});
+    await mod.generateWithGemini("S", "U");
+    await mod.generateWithGemini("S", "U");
+    assert.equal(constructed.length, 1);
+  });
+
   test("a missing text in the Gemini response becomes an empty string (handler then returns 502)", async (t) => {
-    class FakeGoogleGenAI {
-      constructor() {
-        this.models = { generateContent: async () => ({ text: undefined }) };
-      }
-    }
-    t.mock.module("@google/genai", { namedExports: { GoogleGenAI: FakeGoogleGenAI, ThinkingLevel: { LOW: "LOW" } } });
-    const { generateWithGemini } = await import(`../src/lib/narrative/gemini.ts?v=${Date.now()}-empty`);
-    assert.equal(await generateWithGemini("S", "U"), "");
+    const { mod } = await loadGemini(t, {}, { text: undefined });  // explicit undefined, not the default
+    assert.equal(await mod.generateWithGemini("S", "U"), "");
+  });
+});
+
+describe("GEMINI_API_KEY hygiene", () => {
+  const repo = new URL("../", import.meta.url);
+  const read = (p) => readFileSync(new URL(p, repo), "utf8");
+
+  test("never exposed as NEXT_PUBLIC_ anywhere in the source", () => {
+    const tracked = execFileSync("git", ["ls-files", "src", "next.config.mjs", ".env.local.example"], { cwd: repo, encoding: "utf8" }).split("\n").filter(Boolean);
+    for (const f of tracked) assert.ok(!/NEXT_PUBLIC_GEMINI|NEXT_PUBLIC_GOOGLE_API_KEY/.test(read(f)), `${f} exposes a Gemini key to the browser`);
+  });
+  test("only read in the server-side Gemini module", () => {
+    const users = execFileSync("git", ["grep", "-l", "GEMINI_API_KEY", "--", "src"], { cwd: repo, encoding: "utf8" }).split("\n").filter(Boolean);
+    assert.deepEqual(users, ["src/lib/narrative/gemini.ts"]);
+  });
+  test(".env.local is gitignored and untracked; the example keeps the key empty", () => {
+    assert.equal(execFileSync("git", ["ls-files", ".env.local"], { cwd: repo, encoding: "utf8" }).trim(), "");
+    execFileSync("git", ["check-ignore", "-q", ".env.local"], { cwd: repo }); // throws if not ignored
+    assert.match(read(".env.local.example"), /^GEMINI_API_KEY=$/m);
+  });
+  test("not configured in apphosting.yaml", (t) => {
+    if (!existsSync(new URL("apphosting.yaml", repo))) return t.skip("apphosting.yaml not created yet");
+    assert.ok(!/GEMINI_API_KEY|GOOGLE_API_KEY/.test(read("apphosting.yaml")));
   });
 });
