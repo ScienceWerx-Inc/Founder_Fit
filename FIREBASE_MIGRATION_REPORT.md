@@ -430,7 +430,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 3. ✅ `88d83ee` **Dev-only autofill.**
 4. ✅ `07ba5f5` **Firebase client init** (كان `firebase@13.0.0`؛ اتثبّت على `12.19.0` في `35632da` عشان Node 22).
 5. ✅ `8c3a00c` **AuthGate + sign-in/out** (اتجرّب في الـ browser).
-6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ⏳ الـ deploy اتوافق عليه (`firebase deploy --only firestore --project founder-fit-6a455`) على الـ database الحقيقية (`nam5`).
+6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ✅ اتعمل deploy على الـ database الحقيقية (`nam5`) يوم 2026-10-22 بموافقتك (`firebase deploy --only firestore --project founder-fit-6a455`). الـ live ruleset (`2558d0ed…`) مطابق لـ `firestore.rules` حرف بحرف، والـ index exemption بتاع `report` live.
 7. ✅ `fc7787a` **Firestore save بدل Prisma.** Test: real scoring output في الـ emulator. ⏳ الـ end-to-end على الـ database الحقيقية: انت بتجرّبه من `npm run dev`.
 8. ✅ `0ff27e5` **شيل Prisma + الـ agent skills.** Test: `npm ci && npm run build`، و `grep -ri prisma src` فاضي.
    - ✅ `c647281` **fix:** الـ sample waiver note بيتبعت لـ `finish()`، فـ "Run Sample" بقى بيدّي 67 بدل 0 على الـ sensing asset.
@@ -463,7 +463,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 3. ✅ Authentication → Sign-in method → **Google → Enable**.
 4. ✅ **(Owner)** Firestore Database → Create database → **Standard edition** → Location: **`nam5`** (US multi-region؛ مينفعش تتغيّر) → Native mode. اتعملت 2026-10-21.
    - 💡 اختياري: فعّل **delete protection** (حالياً `DELETE_PROTECTION_DISABLED`): `gcloud firestore databases update --database="(default)" --delete-protection --project founder-fit-6a455`. ممكن كمان Point-in-time recovery (حالياً disabled، وليه تكلفة).
-5. ⏳ Deploy للـ rules والـ indexes (`firebase deploy --only firestore`): اتوافق عليه.
+5. ✅ Deploy للـ rules والـ indexes (`firebase deploy --only firestore`)، 2026-10-22. اتأكدت إن الـ live rules مطابقة للـ file.
 6. **Vertex AI:** `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455` (أو Console → APIs & Services → Enable "Vertex AI API").
 7. App Hosting → **Create backend**: region **`us-central1`**، و GitHub connect (org approval لو مطلوب)، repo `ScienceWerx-Inc/Founder_Fit`، root `/`، branch `main`، auto rollouts، runtime `nodejs22`، تربطه بالـ Web app.
 8. **(Owner)** IAM → تدّي **`roles/aiplatform.user`** لـ `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` (الأمر في قسم 7). ده بعد خطوة 7 لأن الـ SA بيتعمل مع App Hosting.
