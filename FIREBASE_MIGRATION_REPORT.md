@@ -267,7 +267,9 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
   - الـ `NEXT_PUBLIC_FIREBASE_*` مش أسرار (الحماية جاية من الـ rules)، فعادي تتكتب في `apphosting.yaml` في repo public.
   - **مفيش أسرار خالص.** الـ route بيكلم Vertex AI بالـ Application Default Credentials (ADC). في App Hosting دي بتبقى الـ runtime service account (`firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com`)، ومحلياً بتبقى حسابك من `gcloud auth application-default login`. يعني مفيش `ANTHROPIC_API_KEY` ولا Secret Manager.
   - App Hosting كمان بيحقن `FIREBASE_CONFIG`، وده اللي الـ Admin SDK بيستخدمه مع `initializeApp()`.
-- **Node:** `"engines": { "node": "22" }` + runtime `nodejs22`. كمان `firebase-admin@14.5.0` بيطلب `node >=22`، و `@google/genai` بيطلب Node 20+ (و Node 22+ من v3.0.0).
+- **Node:** `"engines": { "node": "22" }` + runtime `nodejs22`. `firebase-admin@14.5.0` بيطلب `node >=22`، و `@google/genai` بيطلب Node 20+ (و Node 22+ من v3.0.0).
+  - ⚠️ **`firebase` JS SDK v13 بيطلب Node >= 24.12.0** في الـ `@firebase/*` packages بتاعته (الـ top-level `firebase` مفيهوش `engines`، وده اللي خلّاني أفوّته في خطوة 4). عشان نفضل على Node 22 **ثبّتنا `firebase@12.19.0`** و `@firebase/rules-unit-testing@5.0.2`، وحطينا npm `overrides` لـ `@firebase/app@0.16.2` و `@firebase/app-compat@0.5.18` (نفس اللي جوه firebase 12.19.0)، لأن `firebase-admin` كان بيسحب نسخ Node 24 عن طريق `@firebase/database-compat`. الـ breaking changes بتاعة v13 كانت في AI Logic بس، فمش خسرانين حاجة. (commit `35632da`)
+  - فاضل warning واحد: `eslint-visitor-keys` (dev-only) عايز Node 22.13+، والـ local عندك 22.12. مش بيأثر على App Hosting.
 - **Build settings:** الـ default (`npm run build`). الـ `postinstall` بتاع Prisma اتشال (خطوة 8).
 - **GitHub:** Console → App Hosting → Create backend → region `us-central1` → Connect GitHub → `ScienceWerx-Inc/Founder_Fit`، root `/`، live branch `main`، automatic rollouts on. ⚠️ الـ repo تبع GitHub org، فممكن تحتاج org admin يوافق على الـ Firebase GitHub app.
 - **Analytics:** مفيش، و `@vercel/analytics` اتشال.
@@ -426,7 +428,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 1. ✅ `10cefd7` **Cleanup:** سكريبتات الـ py، و `git rm --cached .env dev.db`، و `.gitignore`.
 2. ✅ `3330671` **شيل Vercel analytics.**
 3. ✅ `88d83ee` **Dev-only autofill.**
-4. ✅ `07ba5f5` **Firebase client init** (`firebase@13.0.0`).
+4. ✅ `07ba5f5` **Firebase client init** (كان `firebase@13.0.0`؛ اتثبّت على `12.19.0` في `35632da` عشان Node 22).
 5. ✅ `8c3a00c` **AuthGate + sign-in/out** (اتجرّب في الـ browser).
 6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ⏳ **الـ deploy مستني الـ Owner يعمل الـ database** (`firebase deploy --only firestore --project founder-fit-6a455`، **بموافقتك**).
 7. ✅ `fc7787a` **Firestore save بدل Prisma.** Test: real scoring output في الـ emulator. ⏳ الـ end-to-end على الـ database الحقيقية بعد الـ deploy.
@@ -440,7 +442,8 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
    - الـ `saveNarrative` في الـ emulator تحت الـ rules الحقيقية
 
    Test الحقيقي (محلياً): `gcloud auth application-default login` + `aiplatform.googleapis.com` متفعّل (قسم 7).
-10. **`apphosting.yaml` + `engines`.** Test: `npm run build` بـ Node 22.
+10. ✅ **`apphosting.yaml` + `engines`.** Test: `npm ci` + `npm run build` بـ Node 22 في نسخة نضيفة من الـ repo من غير `.env.local`، بالـ env اللي في `apphosting.yaml` بس.
+   - ✅ `387eb17` **feat:** `GEMINI_API_KEY` اختياري للـ dev المحلي (Gemini Developer API)، وإلا Vertex AI. بيتجاهل في production، ومش موجود في `apphosting.yaml`.
 11. **App Hosting backend** في `us-central1` (قسم 11) + **`roles/aiplatform.user` للـ runtime SA** + أول rollout. Test: الـ `hosted.app` URL بيفتح.
 12. **Authorized domain** للـ `hosted.app`، و smoke test كامل: login، assessment، save، narrative، PDF، والـ autofill **مش ظاهر**.
 13. **README.**
@@ -492,6 +495,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 - GitHub org permissions ممكن تأخر خطوة 11.
 - الـ rules بتتطلب الـ fields بالظبط، فأي field جديد في الـ code من غير تحديث الـ rules هيخلي الـ save يفشل (`permission-denied`). لازم يتحدّثوا مع بعض.
 - `npm audit`: 17 vulnerability (1 critical) من الـ baseline، لسه ما اتراجعتش.
+- الـ `overrides` في `package.json` (`@firebase/app` و `@firebase/app-compat`) لازم تتشال أو تتحدّث لما نطلع `firebase` لـ v13 (ساعتها لازم Node 24.12+ في الـ `engines` والـ App Hosting runtime والـ local).
 
 **مصادر:**
 - https://firebase.google.com/docs/app-hosting/get-started
@@ -510,4 +514,4 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 - https://firebase.google.com/docs/ai-logic/thinking (thinking levels)
 - https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions و https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations (الـ tool ما قدرش يقرا الـ tables بتاعتهم، فراجعهم بنفسك)
 - https://firebase.google.com/codelabs/ai-genkit-rag (أمر الـ `add-iam-policy-binding` للـ `firebase-app-hosting-compute` SA)
-- Package versions اتجابت بـ `npm view` في 2026-10-21: firebase 13.0.0، firebase-admin 14.5.0 (node >=22)، @google/genai 2.30.0 (node >=20)، firebase-tools 15.34.0.
+- Package versions اتجابت بـ `npm view` في 2026-10-21/22: firebase 12.19.0 (مثبّت؛ 13.0.0 محتاج Node >=24.12)، firebase-admin 14.5.0 (node >=22)، @google/genai 2.30.0 (node >=20)، firebase-tools 15.34.0.

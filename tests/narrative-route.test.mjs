@@ -253,6 +253,7 @@ describe("GEMINI_API_KEY hygiene", () => {
   });
   test("not configured in apphosting.yaml", (t) => {
     if (!existsSync(new URL("apphosting.yaml", repo))) return t.skip("apphosting.yaml not created yet");
-    assert.ok(!/GEMINI_API_KEY|GOOGLE_API_KEY/.test(read("apphosting.yaml")));
+    // Any env entry defining a Gemini/Google API key (as a value or a secret); comments may mention the name.
+    assert.ok(!/^\s*-\s*variable:\s*(GEMINI_API_KEY|GOOGLE_API_KEY)\b/m.test(read("apphosting.yaml")));
   });
 });

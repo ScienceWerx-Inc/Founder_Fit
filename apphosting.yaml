@@ -1,0 +1,37 @@
+# Firebase App Hosting config for founder-fit-6a455 (backend region us-central1 is chosen when the backend is created).
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+# No secrets here: Vertex AI uses the backend's service account (ADC). GEMINI_API_KEY is local-dev only and must never be added.
+
+runConfig:
+  minInstances: 0
+  maxInstances: 2 # cost cap; the default is 100
+
+env:
+  # Firebase web app config. Not secrets (access is enforced by Firestore rules); needed at build time
+  # because Next.js inlines NEXT_PUBLIC_* values into the browser bundle.
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyCqPFMzbP8AJsxDEhpgP4dF0n1qTbVV8Y0
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: founder-fit-6a455.firebaseapp.com
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: founder-fit-6a455
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: founder-fit-6a455.firebasestorage.app
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "455074705484"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "1:455074705484:web:50923e871c7647b67e44e9"
+    availability: [BUILD, RUNTIME]
+
+  # Gemini on Vertex AI for /api/narrative (server-only). Switch the location to "global" if the model 404s in us-central1.
+  - variable: GOOGLE_CLOUD_LOCATION
+    value: us-central1
+    availability: [RUNTIME]
+  - variable: GEMINI_MODEL
+    value: gemini-3.5-flash
+    availability: [RUNTIME]
