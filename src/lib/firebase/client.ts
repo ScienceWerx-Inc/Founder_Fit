@@ -1,6 +1,6 @@
 import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
+import { connectFirestoreEmulator, getFirestore, setLogLevel } from "firebase/firestore";
 
 // Each NEXT_PUBLIC_* var must be referenced literally so Next.js can inline it into the browser bundle.
 const firebaseConfig: FirebaseOptions = {
@@ -23,6 +23,11 @@ if (missing.length > 0) {
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Dev only: add ?fsdebug to the URL to print Firestore's connection/write logs in the browser console.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined" && new URLSearchParams(window.location.search).has("fsdebug")) {
+  setLogLevel("debug");
+}
 
 // Optional local testing: point Firestore at the emulator (e.g. 127.0.0.1:8085). Never set this in production.
 const emulatorHost = process.env.NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST;
