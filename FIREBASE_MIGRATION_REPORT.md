@@ -1,7 +1,7 @@
 # FounderFit → Firebase: تقرير الـ Migration
 
 > اتعمل بـ read-only analysis بتاريخ 2026-10-21 على commit `681af3e`.
-> Firebase Project ID: **`founder-fit-6a455`**. الـ regions: App Hosting و Vertex AI في **`us-central1`**، و Firestore في **`nam5`** (US multi-region، اللي `us-central1` جواه).
+> Firebase Project ID: **`founder-fit-6a455`**. الـ regions: App Hosting في **`us-east4`** (الـ backend `founder-fit` اللي كان موجود)، و Vertex AI في **`us-central1`**، و Firestore في **`nam5`** (US multi-region).
 
 ## 1. Executive summary
 - الأبلكيشن دلوقتي عبارة عن صفحة Next.js 14.2.35 واحدة (`src/app/page.tsx` فيها 1325 سطر، `'use client'`). الـ scoring كله شغال في الـ browser. الحفظ بيحصل من خلال server action بتستخدم Prisma 7 على SQLite.
@@ -64,7 +64,7 @@
 |---|---|---|---|
 | Database | Prisma 7 + SQLite، والـ setup غالباً مكسور | Firestore Standard edition في `nam5`، و `users/{uid}/assessments` بالـ client SDK (فيها `context` و `narrative`)، وشيل Prisma كله | M |
 | Auth | مفيش | Firebase Auth بـ Google (`signInWithPopup`)، و `AuthGate`، وزرار sign-out | M |
-| Hosting/Build | Vercel (ضمني) | `apphosting.yaml`، و `engines.node: 22`، و backend في `us-central1` مربوط بـ GitHub، و Blaze plan | S |
+| Hosting/Build | Vercel (ضمني) | `apphosting.yaml`، و `engines.node: 22`، و backend `founder-fit` في `us-east4` مربوط بـ GitHub، و Blaze plan | S |
 | Env vars & secrets | `.env` committed، ومفيش secrets | `NEXT_PUBLIC_FIREBASE_*` (public)، و `GOOGLE_CLOUD_LOCATION`/`GEMINI_MODEL` (مش أسرار)، و `.env.local` (gitignored). **مفيش secrets** (Vertex AI بالـ ADC) | S |
 | Security | server action مفتوحة لأي حد، ومفيش rules | `firestore.rules` owner-only مع `hasOnly`، و ID token verification في الـ narrative route، و cost guard | M |
 | AI narrative call | `fetch` من الـ browser من غير key (`page.tsx:1043`) | API route على السيرفر + `@google/genai` (Vertex AI، `gemini-3.5-flash`) + verify ID token + حفظ في Firestore | M |
@@ -76,7 +76,7 @@
 **الـ structure:** subcollection `users/{uid}/assessments/{assessmentId}`. الـ ID بيتعمل auto بـ `addDoc`.
 ليه subcollection؟ عشان الـ rule تبقى بسيطة (`uid` جزء من الـ path)، والـ listing بتاع صفحة "My assessments" (Phase 2) يبقى query بسيط من غير composite index. هنحط `ownerUid` في الـ doc كمان.
 
-**Database:** ✅ اتعملت 2026-10-21: الـ `(default)` database، **Standard edition**، **Native mode**، location **`nam5`** (US multi-region). اتأكدت منها بـ `firebase firestore:databases:get "(default)" --project founder-fit-6a455`. الخطة الأولى كانت `us-central1` regional، بس الـ Owner اختار `nam5` وهنسيبها كده: `us-central1` جوه `nam5`، فالـ latency من App Hosting قريبة، والـ multi-region بيدّي availability أعلى (بسعر أعلى شوية من الـ regional). الـ location مينفعش تتغيّر.
+**Database:** ✅ اتعملت 2026-10-21: الـ `(default)` database، **Standard edition**، **Native mode**، location **`nam5`** (US multi-region). اتأكدت منها بـ `firebase firestore:databases:get "(default)" --project founder-fit-6a455`. الخطة الأولى كانت `us-central1` regional، بس الـ Owner اختار `nam5` وهنسيبها كده: الـ App Hosting backend (`us-east4`) و `nam5` الاتنين في أمريكا، فالـ latency بينهم صغيرة، والـ multi-region بيدّي availability أعلى (بسعر أعلى شوية من الـ regional). الـ location مينفعش تتغيّر.
 
 | Field | Type | ملاحظة |
 |---|---|---|
@@ -210,7 +210,7 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
 - **ربط الـ uid:** `finish()` (`page.tsx:938`) هتاخد `user` من `useAuth()`، والـ path `users/{uid}/...`، والـ rules بتتأكد منه.
 - **Console:**
   - Authentication → Sign-in method → Google → Enable + support email.
-  - Settings → Authorized domains: `localhost` و `founder-fit-6a455.firebaseapp.com` موجودين default. لازم تضيف دومين App Hosting، وشكله غالباً `<backend-id>--founder-fit-6a455.us-central1.hosted.app` (**اتأكد منه بالظبط من صفحة الـ backend**).
+  - Settings → Authorized domains: `localhost` و `founder-fit-6a455.firebaseapp.com` و `founder-fit-6a455.web.app` موجودين default. **لازم تضيف `founder-fit--founder-fit-6a455.us-east4.hosted.app`** (دومين الـ backend؛ مش موجود في الـ list لحد 2026-10-22).
   - مرجع: https://firebase.google.com/docs/auth/web/google-signin
 
 **زرار "auto-fill sample" (dev-only):**
@@ -224,7 +224,7 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
   - Blaze plan (لازم).
   - Next.js 13.5+ (14.2.x LTS، فـ 14.2.35 تمام).
   - Node 22+، والـ runtime لازم يتوافق مع `engines` في `package.json`، وإلا Cloud Build هيفشل.
-- **Region:** **`us-central1`** للـ App Hosting backend و Vertex AI، و **`nam5`** (US multi-region، فيه `us-central1`) للـ Firestore. الـ server والـ DB في نفس المنطقة، والـ Firestore location **مينفعش تتغيّر بعد الإنشاء**.
+- **Region:** الـ App Hosting backend في **`us-east4`**. الـ backend `founder-fit` كان معمول قبل كده، والـ region بتاعته مينفعش تتغيّر، وقررنا نسيبه. Vertex AI في **`us-central1`** (من `GOOGLE_CLOUD_LOCATION`، ومستقل عن region الـ server). Firestore في **`nam5`** (US multi-region)، يعني كله جوه أمريكا والـ latency بينهم صغيرة. الـ Firestore location مينفعش تتغيّر.
 - **Files جديدة:**
   - `apphosting.yaml` (**من غير أي secrets**، لأن Vertex AI بيستخدم الـ service account مش API key):
     ```yaml
@@ -271,7 +271,9 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
   - ⚠️ **`firebase` JS SDK v13 بيطلب Node >= 24.12.0** في الـ `@firebase/*` packages بتاعته (الـ top-level `firebase` مفيهوش `engines`، وده اللي خلّاني أفوّته في خطوة 4). عشان نفضل على Node 22 **ثبّتنا `firebase@12.19.0`** و `@firebase/rules-unit-testing@5.0.2`، وحطينا npm `overrides` لـ `@firebase/app@0.16.2` و `@firebase/app-compat@0.5.18` (نفس اللي جوه firebase 12.19.0)، لأن `firebase-admin` كان بيسحب نسخ Node 24 عن طريق `@firebase/database-compat`. الـ breaking changes بتاعة v13 كانت في AI Logic بس، فمش خسرانين حاجة. (commit `35632da`)
   - فاضل warning واحد: `eslint-visitor-keys` (dev-only) عايز Node 22.13+، والـ local عندك 22.12. مش بيأثر على App Hosting.
 - **Build settings:** الـ default (`npm run build`). الـ `postinstall` بتاع Prisma اتشال (خطوة 8).
-- **GitHub:** Console → App Hosting → Create backend → region `us-central1` → Connect GitHub → `ScienceWerx-Inc/Founder_Fit`، root `/`، live branch `main`، automatic rollouts on. ⚠️ الـ repo تبع GitHub org، فممكن تحتاج org admin يوافق على الـ Firebase GitHub app.
+- **الـ backend الموجود** (اتأكدت منه read-only يوم 2026-10-22): `founder-fit`، region `us-east4`، repo `ScienceWerx-Inc/Founder_Fit` (الـ GitHub connection شغال بالفعل)، root `/`، live branch `main` بـ automatic rollouts، runtime **`nodejs24`**، web app `founder-fit` (`…2eae716a…`)، URL `https://founder-fit--founder-fit-6a455.us-east4.hosted.app`. ⚠️ كان بيعرض الـ `main` القديم (`681af3e`).
+  - **لازم يتغيّر:** الـ runtime لـ **`nodejs22`** (عشان يطابق `engines`، وإلا الـ build يفشل)، والـ live branch لـ **`firebase-migration`** لحد ما نعمل merge لـ `main`.
+  - الـ web app المربوط (`…2eae716a…`) غير اللي في `apphosting.yaml` (`FounderFit Web`، `…50923e…`). مش مشكلة، لأن الكود بيستخدم الـ `NEXT_PUBLIC_*` الصريحة.
 - **Analytics:** مفيش، و `@vercel/analytics` اتشال.
 - **Custom domain:** مفيش دلوقتي، والأبلكيشن هيبقى على دومين `hosted.app` الافتراضي.
 
@@ -335,7 +337,7 @@ return Response.json({ narrative: text });
 | `identitytoolkit.googleapis.com` | Firebase Auth (اتفعّل لما فعّلت Google sign-in) |
 | `firebaseapphosting.googleapis.com`، `cloudbuild.googleapis.com`، `run.googleapis.com`، `secretmanager.googleapis.com` | App Hosting. ⚠️ عادةً الـ Console بيفعّلهم وانت بتعمل الـ backend، اتأكد في الخطوة دي |
 
-الأمر: `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455`. محتاج `serviceusage.services.enable`، ودي موجودة في Editor.
+الأمر: `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455`. محتاج `serviceusage.services.enable`، ودي موجودة في Editor. ✅ **اتفعّل 2026-10-22.**
 
 **الـ IAM roles:**
 | مين | الـ role | ليه | مين يقدر يديه |
@@ -350,7 +352,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
   --member="serviceAccount:firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com" \
   --role="roles/aiplatform.user"
 ```
-الـ service account ده بيتعمل أول مرة App Hosting يتفعّل، فالأمر ده بعد إنشاء الـ backend.
+الـ service account ده **موجود بالفعل**، وعنده حالياً `developerconnect.readTokenAccessor` و `firebase.sdkAdminServiceAgent` و `firebaseapphosting.computeRunner` بس، فالـ Owner يقدر يدّيه `roles/aiplatform.user` دلوقتي.
 
 ## 8. Security findings
 1. **`.env` و `dev.db` committed** (من أول commit `709122d`). `.gitignore` كان فيه `.env*.local` بس.
@@ -444,8 +446,8 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
    Test الحقيقي (محلياً): `gcloud auth application-default login` + `aiplatform.googleapis.com` متفعّل (قسم 7).
 10. ✅ **`apphosting.yaml` + `engines`.** Test: `npm ci` + `npm run build` بـ Node 22 في نسخة نضيفة من الـ repo من غير `.env.local`، بالـ env اللي في `apphosting.yaml` بس.
    - ✅ `387eb17` **feat:** `GEMINI_API_KEY` اختياري للـ dev المحلي (Gemini Developer API)، وإلا Vertex AI. بيتجاهل في production، ومش موجود في `apphosting.yaml`.
-11. **App Hosting backend** في `us-central1` (قسم 11) + **`roles/aiplatform.user` للـ runtime SA** + أول rollout. Test: الـ `hosted.app` URL بيفتح.
-12. **Authorized domain** للـ `hosted.app`، و smoke test كامل: login، assessment، save، narrative، PDF، والـ autofill **مش ظاهر**.
+11. **App Hosting backend** (`founder-fit`، `us-east4`، موجود): نعمل push لـ `firebase-migration`، ونغيّر الـ runtime لـ `nodejs22` والـ live branch لـ `firebase-migration`، ونعمل rollout. ✅ Vertex AI API اتفعّل. الـ **Owner** يدّي `roles/aiplatform.user` للـ runtime SA. Test: الـ URL بيفتح الكود الجديد.
+12. **Authorized domain** `founder-fit--founder-fit-6a455.us-east4.hosted.app`، و smoke test كامل: login، assessment، save، narrative، PDF، والـ autofill **مش ظاهر**.
 13. **README.**
 
 **Phase 2 (بعد ما خطوة 12 تنجح):**
@@ -464,14 +466,15 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 4. ✅ **(Owner)** Firestore Database → Create database → **Standard edition** → Location: **`nam5`** (US multi-region؛ مينفعش تتغيّر) → Native mode. اتعملت 2026-10-21.
    - 💡 اختياري: فعّل **delete protection** (حالياً `DELETE_PROTECTION_DISABLED`): `gcloud firestore databases update --database="(default)" --delete-protection --project founder-fit-6a455`. ممكن كمان Point-in-time recovery (حالياً disabled، وليه تكلفة).
 5. ✅ Deploy للـ rules والـ indexes (`firebase deploy --only firestore`)، 2026-10-22. اتأكدت إن الـ live rules مطابقة للـ file.
-6. **Vertex AI:** `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455` (أو Console → APIs & Services → Enable "Vertex AI API").
-7. App Hosting → **Create backend**: region **`us-central1`**، و GitHub connect (org approval لو مطلوب)، repo `ScienceWerx-Inc/Founder_Fit`، root `/`، branch `main`، auto rollouts، runtime `nodejs22`، تربطه بالـ Web app.
-8. **(Owner)** IAM → تدّي **`roles/aiplatform.user`** لـ `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` (الأمر في قسم 7). ده بعد خطوة 7 لأن الـ SA بيتعمل مع App Hosting.
-9. بعد أول rollout: تاخد الـ URL (`<backend-id>--founder-fit-6a455.us-central1.hosted.app`) → Authentication → Settings → **Authorized domains → Add**.
+6. ✅ **Vertex AI:** `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455`. اتفعّل 2026-10-22.
+7. App Hosting: الـ backend **`founder-fit` موجود** (`us-east4`، GitHub متوصّل). Settings → **Runtime: `nodejs22`** (كان `nodejs24`)، و Deployment → **live branch: `firebase-migration`** (root `/`، auto rollouts on). وبعدين Rollouts → **Create rollout** من `firebase-migration`.
+8. **(Owner)** IAM → تدّي **`roles/aiplatform.user`** لـ `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` (الأمر في قسم 7). الـ SA موجود، فينفع دلوقتي.
+9. Authentication → Settings → **Authorized domains → Add `founder-fit--founder-fit-6a455.us-east4.hosted.app`**.
+10. لما الـ smoke test ينجح: merge `firebase-migration` لـ `main`، ونرجّع الـ live branch لـ `main`. ⚠️ لو Vercel لسه بيعمل build من `main` هيفشل (مفيش Firebase env vars هناك)، فيُفضّل يتقفل أو يتشال الأول.
 
 ## 12. Risks & open questions
 **قرارات اتاخدت (للتوثيق):**
-- Project `founder-fit-6a455`. App Hosting و Vertex AI في `us-central1`، و Firestore في **`nam5`** (Standard، Native، US multi-region فيه `us-central1`). الـ Owner اختار `nam5` وهنسيبها.
+- Project `founder-fit-6a455`. App Hosting في **`us-east4`** (الـ backend الموجود `founder-fit`، اتقرر نسيبه)، و Vertex AI في `us-central1`، و Firestore في **`nam5`** (Standard، Native). الـ Owner اختار `nam5` وهنسيبها.
 - **الـ narrative بـ Gemini على Vertex AI** (`@google/genai`، `enterprise: true`، الموديل `gemini-3.5-flash` قابل للتغيير بـ `GEMINI_MODEL`)، بالـ ADC ومن غير API key. Anthropic اتشال من الخطة.
 - الـ narrative بيتحفظ، والـ `context` بيتحفظ.
 - "My assessments" في Phase 2.
@@ -489,7 +492,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 - الموديلات بتتغيّر بسرعة: Gemini 2.5 اتقفل امبارح (2026-10-20). خلّي `GEMINI_MODEL` في `apphosting.yaml` وراجع https://firebase.google.com/docs/ai-logic/models كل كام شهر.
 - الـ thinking tokens بتتحسب بسعر الـ output ومينفعش تتقفل. `thinkingLevel: LOW` و `maxOutputTokens: 4096` بيحطوا سقف.
 - الـ Editor role غالباً كفاية لتجربة Vertex محلياً، بس مش متأكد. لو 403، محتاج `roles/aiplatform.user`.
-- شكل دومين `hosted.app` بالظبط: اتأكد منه من الكونسول.
+- الـ backend كان بيعرض الـ `main` القديم على `https://founder-fit--founder-fit-6a455.us-east4.hosted.app` لحد ما الـ live branch تتغيّر. وأي merge لـ `main` بيعمل rollout أوتوماتيك.
 - الـ popup ممكن يتعمله block، والرسالة الواضحة اتعملت ✅.
 - شيل `ignoreBuildErrors` هيطلّع 210 TS error، وعشان كده هو خطوة منفصلة.
 - تكاليف Blaze: Cloud Run + Cloud Build + Firestore + Vertex AI. الـ `maxInstances: 2` والـ budget alerts بيقللوا المخاطرة.

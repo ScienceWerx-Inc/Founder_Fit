@@ -1,4 +1,4 @@
-# Firebase App Hosting config for founder-fit-6a455 (backend region us-central1 is chosen when the backend is created).
+# Firebase App Hosting config for founder-fit-6a455 (backend "founder-fit" in us-east4; the region is fixed when a backend is created).
 # Docs: https://firebase.google.com/docs/app-hosting/configure
 # No secrets here: Vertex AI uses the backend's service account (ADC). GEMINI_API_KEY is local-dev only and must never be added.
 
