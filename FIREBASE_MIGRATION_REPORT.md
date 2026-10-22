@@ -1,7 +1,7 @@
 # FounderFit → Firebase: تقرير الـ Migration
 
 > اتعمل بـ read-only analysis بتاريخ 2026-10-21 على commit `681af3e`.
-> Firebase Project ID: **`founder-fit-6a455`**. الـ region: **`us-central1`** (App Hosting و Firestore).
+> Firebase Project ID: **`founder-fit-6a455`**. الـ regions: App Hosting و Vertex AI في **`us-central1`**، و Firestore في **`nam5`** (US multi-region، اللي `us-central1` جواه).
 
 ## 1. Executive summary
 - الأبلكيشن دلوقتي عبارة عن صفحة Next.js 14.2.35 واحدة (`src/app/page.tsx` فيها 1325 سطر، `'use client'`). الـ scoring كله شغال في الـ browser. الحفظ بيحصل من خلال server action بتستخدم Prisma 7 على SQLite.
@@ -62,7 +62,7 @@
 ## 3. Gap analysis
 | Area | What exists now | What's needed for Firebase | Effort |
 |---|---|---|---|
-| Database | Prisma 7 + SQLite، والـ setup غالباً مكسور | Firestore Standard edition في `us-central1`، و `users/{uid}/assessments` بالـ client SDK (فيها `context` و `narrative`)، وشيل Prisma كله | M |
+| Database | Prisma 7 + SQLite، والـ setup غالباً مكسور | Firestore Standard edition في `nam5`، و `users/{uid}/assessments` بالـ client SDK (فيها `context` و `narrative`)، وشيل Prisma كله | M |
 | Auth | مفيش | Firebase Auth بـ Google (`signInWithPopup`)، و `AuthGate`، وزرار sign-out | M |
 | Hosting/Build | Vercel (ضمني) | `apphosting.yaml`، و `engines.node: 22`، و backend في `us-central1` مربوط بـ GitHub، و Blaze plan | S |
 | Env vars & secrets | `.env` committed، ومفيش secrets | `NEXT_PUBLIC_FIREBASE_*` (public)، و `GOOGLE_CLOUD_LOCATION`/`GEMINI_MODEL` (مش أسرار)، و `.env.local` (gitignored). **مفيش secrets** (Vertex AI بالـ ADC) | S |
@@ -76,7 +76,7 @@
 **الـ structure:** subcollection `users/{uid}/assessments/{assessmentId}`. الـ ID بيتعمل auto بـ `addDoc`.
 ليه subcollection؟ عشان الـ rule تبقى بسيطة (`uid` جزء من الـ path)، والـ listing بتاع صفحة "My assessments" (Phase 2) يبقى query بسيط من غير composite index. هنحط `ownerUid` في الـ doc كمان.
 
-**Database:** Firestore **Standard edition**، location **`us-central1`** (regional). الـ `(default)` database.
+**Database:** ✅ اتعملت 2026-10-21: الـ `(default)` database، **Standard edition**، **Native mode**، location **`nam5`** (US multi-region). اتأكدت منها بـ `firebase firestore:databases:get "(default)" --project founder-fit-6a455`. الخطة الأولى كانت `us-central1` regional، بس الـ Owner اختار `nam5` وهنسيبها كده: `us-central1` جوه `nam5`، فالـ latency من App Hosting قريبة، والـ multi-region بيدّي availability أعلى (بسعر أعلى شوية من الـ regional). الـ location مينفعش تتغيّر.
 
 | Field | Type | ملاحظة |
 |---|---|---|
@@ -224,7 +224,7 @@ setSavedId(ref.id); // عشان نحفظ الـ narrative في نفس الـ doc
   - Blaze plan (لازم).
   - Next.js 13.5+ (14.2.x LTS، فـ 14.2.35 تمام).
   - Node 22+، والـ runtime لازم يتوافق مع `engines` في `package.json`، وإلا Cloud Build هيفشل.
-- **Region:** **`us-central1`** للـ App Hosting backend، و **`us-central1`** (regional، مش multi-region `nam5`) للـ Firestore، و **`us-central1`** لـ Vertex AI. كده الـ server والـ DB والـ AI في نفس المكان. الـ Firestore location **مينفعش تتغيّر بعد الإنشاء**.
+- **Region:** **`us-central1`** للـ App Hosting backend و Vertex AI، و **`nam5`** (US multi-region، فيه `us-central1`) للـ Firestore. الـ server والـ DB في نفس المنطقة، والـ Firestore location **مينفعش تتغيّر بعد الإنشاء**.
 - **Files جديدة:**
   - `apphosting.yaml` (**من غير أي secrets**، لأن Vertex AI بيستخدم الـ service account مش API key):
     ```yaml
@@ -430,8 +430,8 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 3. ✅ `88d83ee` **Dev-only autofill.**
 4. ✅ `07ba5f5` **Firebase client init** (كان `firebase@13.0.0`؛ اتثبّت على `12.19.0` في `35632da` عشان Node 22).
 5. ✅ `8c3a00c` **AuthGate + sign-in/out** (اتجرّب في الـ browser).
-6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ⏳ **الـ deploy مستني الـ Owner يعمل الـ database** (`firebase deploy --only firestore --project founder-fit-6a455`، **بموافقتك**).
-7. ✅ `fc7787a` **Firestore save بدل Prisma.** Test: real scoring output في الـ emulator. ⏳ الـ end-to-end على الـ database الحقيقية بعد الـ deploy.
+6. ✅ `bf3c75b` **Firestore rules + indexes** + `firebase.json`/`.firebaserc`. Test: 22 case في الـ emulator. ⏳ الـ deploy اتوافق عليه (`firebase deploy --only firestore --project founder-fit-6a455`) على الـ database الحقيقية (`nam5`).
+7. ✅ `fc7787a` **Firestore save بدل Prisma.** Test: real scoring output في الـ emulator. ⏳ الـ end-to-end على الـ database الحقيقية: انت بتجرّبه من `npm run dev`.
 8. ✅ `0ff27e5` **شيل Prisma + الـ agent skills.** Test: `npm ci && npm run build`، و `grep -ri prisma src` فاضي.
    - ✅ `c647281` **fix:** الـ sample waiver note بيتبعت لـ `finish()`، فـ "Run Sample" بقى بيدّي 67 بدل 0 على الـ sensing asset.
 9. **Narrative route (Vertex AI):** `npm i @google/genai firebase-admin`، والـ route، والـ prompt module، والـ client call، و `saveNarrative`. Test (من غير access حقيقي):
@@ -461,8 +461,9 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 1. Project `founder-fit-6a455` → Upgrade لـ **Blaze**، وتعمل **budget alert** في GCP Billing.
 2. ✅ Project settings → Your apps → **Add Web app** (الـ config اتحط في `.env.local`).
 3. ✅ Authentication → Sign-in method → **Google → Enable**.
-4. ⏳ **(Owner)** Firestore Database → Create database → **Standard edition** → Location: **`us-central1`** (Regional، مش multi-region، ومينفعش تتغيّر) → **Production mode**. الـ Editor ناقصه `datastore.databases.create`.
-5. Deploy للـ rules (`firebase deploy --only firestore`)، وبعدين تراجع tab الـ Rules.
+4. ✅ **(Owner)** Firestore Database → Create database → **Standard edition** → Location: **`nam5`** (US multi-region؛ مينفعش تتغيّر) → Native mode. اتعملت 2026-10-21.
+   - 💡 اختياري: فعّل **delete protection** (حالياً `DELETE_PROTECTION_DISABLED`): `gcloud firestore databases update --database="(default)" --delete-protection --project founder-fit-6a455`. ممكن كمان Point-in-time recovery (حالياً disabled، وليه تكلفة).
+5. ⏳ Deploy للـ rules والـ indexes (`firebase deploy --only firestore`): اتوافق عليه.
 6. **Vertex AI:** `gcloud services enable aiplatform.googleapis.com --project founder-fit-6a455` (أو Console → APIs & Services → Enable "Vertex AI API").
 7. App Hosting → **Create backend**: region **`us-central1`**، و GitHub connect (org approval لو مطلوب)، repo `ScienceWerx-Inc/Founder_Fit`، root `/`، branch `main`، auto rollouts، runtime `nodejs22`، تربطه بالـ Web app.
 8. **(Owner)** IAM → تدّي **`roles/aiplatform.user`** لـ `firebase-app-hosting-compute@founder-fit-6a455.iam.gserviceaccount.com` (الأمر في قسم 7). ده بعد خطوة 7 لأن الـ SA بيتعمل مع App Hosting.
@@ -470,7 +471,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 
 ## 12. Risks & open questions
 **قرارات اتاخدت (للتوثيق):**
-- Project `founder-fit-6a455`، والـ region `us-central1` لـ App Hosting و Firestore (Standard، regional) و Vertex AI.
+- Project `founder-fit-6a455`. App Hosting و Vertex AI في `us-central1`، و Firestore في **`nam5`** (Standard، Native، US multi-region فيه `us-central1`). الـ Owner اختار `nam5` وهنسيبها.
 - **الـ narrative بـ Gemini على Vertex AI** (`@google/genai`، `enterprise: true`، الموديل `gemini-3.5-flash` قابل للتغيير بـ `GEMINI_MODEL`)، بالـ ADC ومن غير API key. Anthropic اتشال من الخطة.
 - الـ narrative بيتحفظ، والـ `context` بيتحفظ.
 - "My assessments" في Phase 2.
@@ -481,7 +482,7 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 - Retention: زرار الـ delete في Phase 2 كفاية دلوقتي.
 
 **مستني:**
-- الـ **Owner** يعمل الـ Firestore database، ويدّي `roles/aiplatform.user` للـ App Hosting SA (الـ Editor ميقدرش يعمل الاتنين).
+- الـ **Owner** يدّي `roles/aiplatform.user` للـ App Hosting SA بعد ما الـ backend يتعمل (الـ Editor ميقدرش). الـ Firestore database ✅ اتعملت.
 
 **Risks:**
 - ⚠️ **توافر `gemini-3.5-flash` في `us-central1` مش متأكد منه.** الـ docs بتقول الـ locations "depend on the model" وبتنصح بـ `global`، وفيه bug report عن 404 لـ 3.5 Flash في `us-central1` عند project معيّن (https://github.com/cline/cline/issues/11490). لو طلع 404، غيّر `GOOGLE_CLOUD_LOCATION` لـ `global` من غير تعديل في الـ code.
@@ -495,6 +496,8 @@ gcloud projects add-iam-policy-binding founder-fit-6a455 \
 - GitHub org permissions ممكن تأخر خطوة 11.
 - الـ rules بتتطلب الـ fields بالظبط، فأي field جديد في الـ code من غير تحديث الـ rules هيخلي الـ save يفشل (`permission-denied`). لازم يتحدّثوا مع بعض.
 - `npm audit`: 17 vulnerability (1 critical) من الـ baseline، لسه ما اتراجعتش.
+- Firestore في `nam5` (multi-region) أغلى شوية من regional للـ storage والـ operations. عند حجم البيانات ده الفرق صغير.
+- الـ database delete protection مقفول حالياً، ويُفضّل يتفعّل (قسم 11، خطوة 4).
 - الـ `overrides` في `package.json` (`@firebase/app` و `@firebase/app-compat`) لازم تتشال أو تتحدّث لما نطلع `firebase` لـ v13 (ساعتها لازم Node 24.12+ في الـ `engines` والـ App Hosting runtime والـ local).
 
 **مصادر:**
