@@ -15,6 +15,7 @@ button { font-family: inherit; }
 @media (max-width: 640px) {
   .shell-container { padding: 20px 12px !important; }
   .shell-header { padding: 10px 12px !important; flex-wrap: wrap; gap: 10px; }
+  .user-email { max-width: 130px !important; }
   h1 { font-size: 28px !important; }
   
   /* Aggressively override any inline grids on mobile to single column */

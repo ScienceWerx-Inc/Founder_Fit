@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Exact field set of an assessment doc; keep in sync with the save code and schemaVersion.
+    function assessmentFields() {
+      return ['ownerUid','candidateName','assetId','assetName','ffiScore','band',
+              'validityStatus','versions','context','report','narrative',
+              'schemaVersion','createdAt','updatedAt'];
+    }
+    function contextKeys() {
+      return ['K1','K2','K3','K4','K5','K6','K7','K8','K9','K10'];
+    }
+
+    match /users/{uid}/assessments/{assessmentId} {
+      allow read, delete: if isOwner(uid);
+
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasAll(assessmentFields())
+        && request.resource.data.keys().hasOnly(assessmentFields())
+        && request.resource.data.ownerUid == uid
+        && request.resource.data.candidateName is string
+        && request.resource.data.candidateName.size() <= 200
+        && request.resource.data.assetId is string
+        && request.resource.data.assetName is string
+        && request.resource.data.ffiScore is int
+        && request.resource.data.ffiScore >= 0 && request.resource.data.ffiScore <= 100
+        && request.resource.data.band in
+             ['anchor','anchor_with_complement','technical_founder','contributor_advisor','no_fit_anchor']
+        && request.resource.data.validityStatus in ['clean','flagged','void']
+        && request.resource.data.versions is map
+        && request.resource.data.context is map
+        && request.resource.data.context.keys().hasOnly(contextKeys())
+        && request.resource.data.report is map
+        && request.resource.data.narrative == null
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // Only the generated narrative (and its timestamp) may change after creation.
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['narrative','updatedAt'])
+        && request.resource.data.narrative is string
+        && request.resource.data.narrative.size() <= 20000
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    // Everything else is closed.
+    match /{document=**} { allow read, write: if false; }
+  }
+}

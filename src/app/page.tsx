@@ -1,6 +1,9 @@
 'use client';
-import { saveAssessment } from './actions';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { AuthGate, useAuth } from './AuthGate';
+import { db } from '@/lib/firebase/client';
+import { createAssessment, saveNarrative } from '@/lib/assessments';
+import { T } from './theme';
 
 const CONSTANTS = {
     BASE_MATCH: 88,
@@ -388,6 +391,8 @@ const CONSTANTS = {
     }
   };
   const VERSIONS = { content_version: "v1.0.0", algo_version: "1.0.0", norms_version: "provisional-1" };
+  // Sample-candidate autofill is a dev aid; inlined at build time, so it's hidden in production builds.
+  const SHOW_DEV_TOOLS = process.env.NODE_ENV !== "production";
   const ASSET_DIM_META = [
     { code: "D1", label: "Technical Maturity" },
     { code: "D2", label: "Residual Science Risk" },
@@ -756,29 +761,6 @@ const CONSTANTS = {
       adjacency: { J1: 3, J2: 2, J3: 3, J4: 4, J5: 4 }
     };
   }
-  const T = {
-    paper: "#F5F6F2",
-    surface: "#FFFFFF",
-    ink: "#171B21",
-    mut: "#5B6371",
-    line: "#E1E4DC",
-    lineDark: "#C9CDC3",
-    accent: "#0E6B54",
-    accentSoft: "#E3EFEA",
-    amber: "#9A5B00",
-    amberSoft: "#F5EAD6",
-    red: "#A6271C",
-    redSoft: "#F6E3E0",
-    plum: "#5B4FC7",
-    plumSoft: "#ECEAF9",
-    dark: "#12161C",
-    darkLine: "#2A313B",
-    consoleCard: "#1A2027",
-    consoleText: "#E8EBE6",
-    consoleMut: "#8B94A1",
-    most: "#2FBE8F",
-    least: "#D9822B"
-  };
   const BAND_LABELS = {
     anchor: "Anchor Founder",
     anchor_with_complement: "Anchor with Complement",
@@ -850,6 +832,7 @@ const CONSTANTS = {
     return /* @__PURE__ */ React.createElement("div", { style: { position: "relative", height: 20, background: "#EDEFE9", borderRadius: 3, overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, borderRadius: 3, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", left: 0, top: 0, bottom: 0, width: `${percentile}%`, background: barColor, opacity: 0.85, borderRadius: 3 } })), /* @__PURE__ */ React.createElement("div", { title: `demand ${demand}`, style: { position: "absolute", left: `${demand}%`, top: -4, bottom: -4, width: 2, background: T.ink } }));
   }
   function FounderFitAssessment() {
+    const { user, signOut } = useAuth();
     const [step, setStep] = useState("intro");
     const [assetId, setAssetId] = useState(PRESET_ASSETS[0].id);
     const [assetScores, setAssetScores] = useState({ ...PRESET_ASSETS[0].scores });
@@ -864,6 +847,16 @@ const CONSTANTS = {
     const [idx, setIdx] = useState(0);
     const [latencies, setLatencies] = useState([]);
     const [output, setOutput] = useState(null);
+    const [savedId, setSavedId] = useState<string | null>(null); // Firestore id of the latest saved assessment (narrative is attached to it in step 9)
+    // Dev-only save status shown on the results page; saveSeq ignores late results from an earlier finish().
+    const [saveStatus, setSaveStatus] = useState<{ state: "idle" | "saving" | "saved" | "failed"; id?: string; code?: string; startedAt?: number }>({ state: "idle" });
+    const [, setSaveTick] = useState(0);
+    const saveSeq = useRef(0);
+    useEffect(() => {
+      if (!SHOW_DEV_TOOLS || saveStatus.state !== "saving") return;
+      const t = setInterval(() => setSaveTick((n) => n + 1), 1e3);
+      return () => clearInterval(t);
+    }, [saveStatus.state]);
     const [audience, setAudience] = useState("decision_maker");
     const [narrative, setNarrative] = useState(null);
     const [narrLoading, setNarrLoading] = useState(false);
@@ -935,35 +928,51 @@ const CONSTANTS = {
       const latency_ms = Date.now() - mountTime.current;
       setLatencies((prev) => [...prev, { item_code, section, latency_ms }]);
     };
-    const finish = (adjOverride, extra = {}) => {
+    const finish = (adjOverride, extra: { fc?: any; sc?: any; cal?: any; lat?: any; name?: string; ctx?: Record<string, string>; waiver?: string } = {}) => {
       const assessment = {
         forcedChoice: FC_BLOCKS.map((b) => ({ block: b.code, ...(extra.fc ?? fcAnswers)[b.code] })).filter((r) => r.most && r.least && r.most !== r.least),
         scenarios: SCENARIOS.map((s) => ({ code: s.code, choice: (extra.sc ?? scAnswers)[s.code] })).filter((r) => r.choice),
         calibration: CALIBRATION.map((c) => ({ code: c.code, value: (extra.cal ?? calAnswers)[c.code] })).filter((r) => r.value !== void 0),
         latencies: extra.lat ?? latencies
       };
+      const waiver = (extra.waiver ?? waiverNote).trim();
       const attestations = {
         ip_conflict_reviewed: ipGateActive ? ipReviewed : void 0,
-        waivers: buyerGateActive && waiverNote.trim() ? [{ gate_code: "GATE_BUYER_ACCESS", note: waiverNote.trim() }] : []
+        waivers: buyerGateActive && waiver ? [{ gate_code: "GATE_BUYER_ACCESS", note: waiver }] : []
       };
       const out = runScoring({ asset: assetScores, assessment, adjacency: { scores: adjOverride ?? adjScores }, attestations });
       setOutput(out);
       setNarrative(null);
       setNarrError(null);
       setStep("results");
-      
-      // Save to database
-      saveAssessment(candidateName, asset.name, out.result.ffi, out.result.band, out).then(res => {
-        if (res.success) {
-          console.log("Saved assessment to DB with ID:", res.id);
-        } else {
-          console.error("Error saving assessment:", res.error);
-        }
+
+      // Save to Firestore; every finish (including re-score) creates a new doc.
+      // addDoc only settles once the server acknowledges the write, so an unreachable backend shows as a long "Saving…".
+      const seq = ++saveSeq.current;
+      setSavedId(null);
+      setSaveStatus({ state: "saving", startedAt: Date.now() });
+      createAssessment(db, user.uid, {
+        candidateName: extra.name ?? candidateName,
+        assetId,
+        assetName: asset.name,
+        context: extra.ctx ?? context,
+        versions: VERSIONS,
+        output: out
+      }).then((id) => {
+        if (seq !== saveSeq.current) return;
+        setSavedId(id);
+        setSaveStatus({ state: "saved", id });
+        console.log("Saved assessment to Firestore with ID:", id);
+      }).catch((e) => {
+        if (seq !== saveSeq.current) return;
+        setSaveStatus({ state: "failed", code: e?.code ?? e?.message ?? String(e) });
+        console.error("Error saving assessment:", e);
       });
     };
     const autofill = () => {
       const s = sampleCandidate();
-      setCandidateName(candidateName || "Sample Candidate");
+      const name = candidateName || "Sample Candidate";
+      setCandidateName(name);
       setContext(s.context);
       const fc = {};
       for (const r of s.forcedChoice) fc[r.block] = { most: r.most, least: r.least };
@@ -976,8 +985,10 @@ const CONSTANTS = {
       setCalAnswers(cal);
       setLatencies(s.latencies);
       setAdjScores(s.adjacency);
-      setWaiverNote(buyerGateActive ? "Commercial co-founder identified: former VP Ops at a target operator, with current decision-maker access." : "");
-      finish(s.adjacency, { fc, sc, cal, lat: s.latencies });
+      const waiver = buyerGateActive ? "Commercial co-founder identified: former VP Ops at a target operator, with current decision-maker access." : "";
+      setWaiverNote(waiver);
+      // State setters above apply on the next render, so pass the sample values to finish() directly.
+      finish(s.adjacency, { fc, sc, cal, lat: s.latencies, name, ctx: s.context, waiver });
     };
     const generateNarrative = async () => {
       if (!output) return;
@@ -993,63 +1004,24 @@ const CONSTANTS = {
         buyer_market_label: asset.buyer_market_label,
         top_demands
       };
-      const system = `You are the narrative writer for FounderFit, an instrument that evaluates how well a specific person fits a specific technology venture. All scoring has already been completed deterministically. Your only job is to write clear prose that explains results you are given.
-
-WHAT FOUNDERFIT MEASURES
-
-FounderFit is a two-sided match. An asset \u2014 a discovered technology or piece of IP \u2014 is characterized first, and that characterization produces a demand profile: what this particular venture will require of whoever leads it. The candidate is then scored against that demand profile, not against a general standard.
-
-This means a low score on a dimension is not a statement about the person. It is a statement about the relationship between this person and this asset. The same person may be an excellent match for a different technology. Write accordingly, always.
-
-Dimensions fall into three groups, and the distinction between them is the single most important thing your writing must convey:
-
- DISPOSITION (P1-P9) \u2014 stable characteristics. These do not meaningfully change on venture timescales. A disposition gap is a structural fact to design around, never a development goal. Never suggest someone "work on" a disposition gap.
-
- CAPABILITY (C1-C8) \u2014 learnable competencies. These close in 90 to 180 days with structured support. Always frame these as development, never as deficiency.
-
- ADJACENCY (J1-J5) \u2014 asset-relative position: domain standing, market access, transition experience, authenticity of conviction, and available capacity. These do not change quickly, but J1, J2, and J3 can be substituted by a co-founder or hire. J4 and J5 cannot be substituted by anyone.
-
-HARD RULES
-
-1. Never state, imply, or compute a number that does not appear in the input JSON. Do not round, average, convert, or estimate. If you want to express magnitude without a supplied number, use words.
-2. Never contradict the computed band, gate results, fit pattern, or gap routing. If a gate failed, the person is not the anchor founder for this asset. Do not soften that into a maybe.
-3. Never use clinical, diagnostic, or psychological-disorder language. This is not a psychological assessment and must never read like one.
-4. Never infer or reference age, gender, ethnicity, nationality, religion, disability, or health. Not even indirectly.
-5. Never recommend hiring, firing, promotion, or compensation. You describe fit and configuration; employment decisions belong to people.
-6. Never invent evidence. Every claim traces to a dimension score, a gap, a risk flag, or the asset context you were given.
-7. If validity status is "flagged", say so plainly in the assessment section and note that disposition scores should be read with caution.
-8. Do not describe the scoring mechanics, weights, formulas, or this instrument's internal structure to a candidate audience.
-
-VOICE
-
-Direct, specific, and respectful. Write as a serious analyst would write for a serious reader. Concrete over abstract. No hedging stacks. No inflation. No filler openers. Do not address the reader as "you" in decision-maker reports; use the candidate's name or "the candidate."
-
-Above all: be honest. A report that flatters a bad match causes a venture to fail slowly and expensively. The most valuable thing this instrument produces is an uncomfortable finding delivered clearly.`;
-      const { vdp: _omit, ...scoreOnly } = output;
-      const user = `Write the FounderFit report narrative.
-
-AUDIENCE: ${audience}
-
-CANDIDATE NAME: ${candidateName || "The candidate"}
-
-ASSET CONTEXT:
-${JSON.stringify(asset_context, null, 2)}
-
-SCORE RESULT:
-${JSON.stringify(scoreOnly.result, null, 2)}
-
-Write these sections, each under a plain heading: Executive Summary (3-5 sentences), Strengths Against This Asset, Development Priorities (capabilities only), Structural Considerations (dispositions and adjacency), Fit Pattern and Failure Mode, Recommended Configuration. Keep the whole narrative under 700 words.`;
       try {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
+        const idToken = await user.getIdToken();
+        const response = await fetch("/api/narrative", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1e3, temperature: 0.3, system, messages: [{ role: "user", content: user }] })
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ audience, candidateName, asset_context, result: output.result })
         });
-        const data = await response.json();
-        const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-        if (!text) throw new Error("Empty response");
-        setNarrative(text);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.narrative) throw new Error(`Narrative request failed (${response.status}${data.error ? `: ${data.error}` : ""})`);
+        setNarrative(data.narrative);
+        // Attach it to the saved assessment; the report still shows it if this save fails.
+        if (savedId) {
+          saveNarrative(db, user.uid, savedId, data.narrative).catch((e) => console.error("Error saving narrative:", e));
+        } else {
+          console.warn("Narrative generated before the assessment finished saving; it was not stored.");
+        }
       } catch (e) {
+        console.error(e);
         setNarrError("Narrative generation unavailable \u2014 showing the deterministic fallback narrative below (per spec, reports still generate when the LLM is down).");
         setNarrative(null);
       }
@@ -1075,7 +1047,16 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
       }
       else if (step === "results") setStep("adjacency");
     };
-    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { className: "shell-header no-print", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("a", { href: "/", style: { textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("svg", { width: "24", height: "24", viewBox: "0 0 32 32", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, /* @__PURE__ */ React.createElement("rect", { width: "32", height: "32", rx: "8", fill: "#1C2321" }), /* @__PURE__ */ React.createElement("path", { d: "M10 22V10L16 16L22 10V22", stroke: "#F5F6F2", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "16", cy: "8", r: "2", fill: "#C55233" })), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 20, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, verticalAlign: "super", color: T.mut, marginLeft: 2 } }, "™"))), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx · algo ", VERSIONS.algo_version, " · content ", VERSIONS.content_version)), step !== "intro" && /* @__PURE__ */ React.createElement("div", { style: { display: 'flex', gap: '8px' } }, /* @__PURE__ */ React.createElement("button", { onClick: handleBack, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "← Back"), step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample →"), step === "results" && /* @__PURE__ */ React.createElement("button", { onClick: () => window.print(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.ink, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "↓ Save PDF")))), /* @__PURE__ */ React.createElement("div", { className: "shell-container", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "36px 20px 80px" } }, children));
+    const saveSeconds = saveStatus.startedAt ? Math.floor((Date.now() - saveStatus.startedAt) / 1e3) : 0;
+    const saveStatusText =
+      saveStatus.state === "saving" ? `Saving… ${saveSeconds}s` + (saveSeconds >= 10 ? " — no reply from Firestore yet; the write is queued in this browser. Check DevTools → Network for firestore.googleapis.com requests (ERR_BLOCKED_BY_CLIENT means an extension/ad blocker), or reload with ?fsdebug for Firestore debug logs." : "")
+        : saveStatus.state === "saved" ? `Saved ✓ ${saveStatus.id}`
+        : saveStatus.state === "failed" ? `Save failed: ${saveStatus.code}`
+        : "";
+    const saveStatusBanner = SHOW_DEV_TOOLS && saveStatus.state !== "idle" && /* @__PURE__ */ React.createElement("div", { className: "no-print", role: "status", style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, lineHeight: 1.5, marginBottom: 16, padding: "8px 12px", borderRadius: 6, border: `1px solid ${saveStatus.state === "failed" ? T.red : saveStatus.state === "saved" ? T.accent : T.lineDark}`, background: saveStatus.state === "failed" ? T.redSoft : saveStatus.state === "saved" ? T.accentSoft : T.surface, color: saveStatus.state === "failed" ? T.red : T.ink } }, "dev · ", saveStatusText);
+    // Signed-in email + Sign out, shared by the intro header and the shell() header.
+    const userMenu = /* @__PURE__ */ React.createElement("div", { className: "no-print user-menu", style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { className: "no-print user-email", title: user.email ?? "", style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, user.email), /* @__PURE__ */ React.createElement("button", { className: "no-print", onClick: () => signOut(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer", whiteSpace: "nowrap" } }, "Sign out"));
+    const shell = (children, { wide } = {}) => /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif" } }, /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { borderBottom: `1px solid ${T.line}`, background: T.surface } }, /* @__PURE__ */ React.createElement("div", { className: "shell-header no-print", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 10 } }, /* @__PURE__ */ React.createElement("a", { href: "/", style: { textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: 10 } }, /* @__PURE__ */ React.createElement("svg", { width: "24", height: "24", viewBox: "0 0 32 32", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, /* @__PURE__ */ React.createElement("rect", { width: "32", height: "32", rx: "8", fill: "#1C2321" }), /* @__PURE__ */ React.createElement("path", { d: "M10 22V10L16 16L22 10V22", stroke: "#F5F6F2", strokeWidth: "2.5", strokeLinecap: "round", strokeLinejoin: "round" }), /* @__PURE__ */ React.createElement("circle", { cx: "16", cy: "8", r: "2", fill: "#C55233" })), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 20, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, verticalAlign: "super", color: T.mut, marginLeft: 2 } }, "™"))), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut } }, "ScienceWerx · algo ", VERSIONS.algo_version, " · content ", VERSIONS.content_version)), /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" } }, userMenu, step !== "intro" && /* @__PURE__ */ React.createElement("div", { style: { display: 'flex', gap: '8px' } }, /* @__PURE__ */ React.createElement("button", { onClick: handleBack, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "← Back"), SHOW_DEV_TOOLS && step !== "results" && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, background: "none", border: `1px solid ${T.line}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "auto-fill sample →"), step === "results" && /* @__PURE__ */ React.createElement("button", { onClick: () => window.print(), style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.ink, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 4, padding: "4px 10px", cursor: "pointer" } }, "↓ Save PDF"))))), /* @__PURE__ */ React.createElement("div", { className: "shell-container", style: { maxWidth: wide ? 1200 : 900, margin: "0 auto", padding: "36px 20px 80px" } }, children));
     if (step === "intro") {
       return /* @__PURE__ */ React.createElement("div", { style: { minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: "'IBM Plex Sans', sans-serif", display: "flex", flexDirection: "column" } }, 
         /* @__PURE__ */ React.createElement("div", { className: "shell-header", style: { padding: "16px 40px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${T.line}`, background: T.surface } },
@@ -1087,7 +1068,10 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
              ),
              /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 800, fontSize: 24, letterSpacing: "-0.02em" } }, "FounderFit", /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, verticalAlign: "super", color: T.mut, marginLeft: 4 } }, "™"))
           ),
-          /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: T.mut } }, "ScienceWerx")
+          /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap", justifyContent: "flex-end" } },
+            /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: T.mut } }, "ScienceWerx"),
+            userMenu
+          )
         ),
         /* @__PURE__ */ React.createElement("main", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 20px", textAlign: "center" } },
           /* @__PURE__ */ React.createElement("div", { style: { display: "inline-block", padding: "6px 14px", border: `1px solid ${T.accent}40`, borderRadius: 20, color: T.accent, fontWeight: 600, fontSize: 13, marginBottom: 24, fontFamily: "'IBM Plex Mono', monospace" } }, "v2.0 — Two-Sided Matching Engine"),
@@ -1110,7 +1094,7 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
           
           /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", justifyContent: "center" } },
             /* @__PURE__ */ React.createElement("button", { onClick: () => setStep("asset"), style: { background: T.ink, color: "#fff", padding: "16px 40px", fontSize: 18, fontWeight: 600, borderRadius: 8, cursor: "pointer", border: "none", boxShadow: "0 4px 12px rgba(0,0,0,0.15)" } }, "Begin Assessment"),
-            /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { background: "none", color: T.ink, padding: "16px 40px", fontSize: 18, fontWeight: 500, borderRadius: 8, cursor: "pointer", border: `2px solid ${T.lineDark}` } }, "Run Sample Candidate")
+            SHOW_DEV_TOOLS && /* @__PURE__ */ React.createElement("button", { onClick: autofill, style: { background: "none", color: T.ink, padding: "16px 40px", fontSize: 18, fontWeight: 500, borderRadius: 8, cursor: "pointer", border: `2px solid ${T.lineDark}` } }, "Run Sample Candidate")
           )
         )
       );
@@ -1300,7 +1284,7 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
       const sevColor = { critical: T.red, material: T.amber, minor: T.mut };
       const sevBg = { critical: T.redSoft, material: T.amberSoft, minor: "#EEF0EA" };
       return shell(
-        /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { background: T.dark, color: "#E8EBE6", borderRadius: 10, padding: "26px 26px 22px", marginBottom: 26 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 20 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8B94A1" } }, "FounderFit report \xB7 ", candidateName || "Candidate", " \xD7 ", asset.name), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 18, marginTop: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 56, fontWeight: 600, lineHeight: 1 } }, R.ffi), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#8B94A1", marginLeft: 6 } }, "/ 100 FFI")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: bandColor === T.red ? "#F2A69E" : bandColor === T.amber ? "#E8C27A" : "#7ED0B4" } }, BAND_LABELS[R.band]), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#B9C1CC", maxWidth: 460, lineHeight: 1.5 } }, BAND_DESC[R.band])))), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B94A1", textAlign: "right", lineHeight: 1.9 } }, "anchor confidence ", R.anchor_confidence, "/5", /* @__PURE__ */ React.createElement("br", null), "validity: ", /* @__PURE__ */ React.createElement("span", { style: { color: R.validity.status === "clean" ? "#7ED0B4" : R.validity.status === "flagged" ? "#E8C27A" : "#F2A69E" } }, R.validity.status), /* @__PURE__ */ React.createElement("br", null), "pattern: ", R.fit_pattern.label, R.fit_pattern.hybrid_with ? ` / ${FIT_PATTERNS.find((p) => p.code === R.fit_pattern.hybrid_with)?.label}` : ""))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Gates \u2014 pass/fail conditions for the anchor role"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.gates.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.code, style: { display: "flex", gap: 12, alignItems: "flex-start", background: T.surface, border: `1px solid ${T.line}`, borderLeft: `4px solid ${g.passed ? T.accent : g.waived ? T.amber : T.red}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600, color: g.passed ? T.accent : g.waived ? T.amber : T.red, minWidth: 62 } }, g.passed ? "PASS" : g.waived ? "WAIVED" : "FAIL"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, g.code.replace("GATE_", "")), g.dimension ? ` (${g.dimension} \u2265 ${g.threshold})` : "", " \u2014 ", g.reason, g.waiver_note && /* @__PURE__ */ React.createElement("em", { style: { display: "block", color: T.mut, marginTop: 2 } }, "Waiver: ", g.waiver_note)))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Dimension profile \u2014 actual vs. demand (tick = what this asset requires)"), groups.map(([g, title]) => /* @__PURE__ */ React.createElement("div", { key: g, style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, marginBottom: 10 } }, title), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 9 } }, R.dimensions.filter((d) => d.group === g).map((d) => /* @__PURE__ */ React.createElement("div", { key: d.code, style: { display: "grid", gridTemplateColumns: "minmax(180px, 260px) 1fr 140px", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, lineHeight: 1.35 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", color: T.mut, marginRight: 6 } }, d.code), d.label), /* @__PURE__ */ React.createElement(ReadoutBar, { percentile: d.percentile, demand: d.demand_level, group: d.group }), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: T.mut, textAlign: "right" } }, d.percentile.toFixed(0), " vs ", d.demand_level, " \xB7 w", d.weight.toFixed(1)))))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Talents against this asset"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, strengths.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, color: T.mut } }, "No dimension meaningfully exceeds this asset's demand profile."), strengths.map((d) => /* @__PURE__ */ React.createElement("div", { key: d.code, style: { background: T.accentSoft, border: `1px solid ${T.accent}33`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.5 } }, /* @__PURE__ */ React.createElement("strong", null, d.label), " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: T.mut } }, "(", d.code, " \xB7 ", d.percentile.toFixed(0), ", demand ", d.demand_level, ")"), /* @__PURE__ */ React.createElement("div", { style: { color: "#33413B", marginTop: 2 } }, FALLBACK.strength[d.code]))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Gap ledger \u2014 what falls short of this venture's demand, and what to do about it"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.gaps.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, color: T.mut } }, "No gaps at or above the reporting threshold."), R.gaps.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.dimension, style: { background: sevBg[g.severity], border: `1px solid ${sevColor[g.severity]}33`, borderRadius: 6, padding: "12px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 } }, /* @__PURE__ */ React.createElement("strong", null, g.label, " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 400, color: T.mut } }, "(", g.dimension, ")")), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 600, color: sevColor[g.severity], textTransform: "uppercase", letterSpacing: "0.08em" } }, g.severity, " \xB7 shortfall ", g.shortfall.toFixed(0))), /* @__PURE__ */ React.createElement("div", { style: { color: "#4A4438", marginTop: 3 } }, FALLBACK.gap[g.dimension]), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" } }, g.routes.map((r) => /* @__PURE__ */ React.createElement("span", { key: r, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, border: `1px solid ${sevColor[g.severity]}55`, borderRadius: 4, padding: "2px 7px", color: sevColor[g.severity] } }, ROUTE_LABELS[r]))))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Fit pattern"), /* @__PURE__ */ React.createElement("div", { style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: 18, marginTop: 12, fontSize: 14, lineHeight: 1.6 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 17, fontWeight: 700 } }, R.fit_pattern.label, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 400, color: T.mut, marginLeft: 10 } }, "similarity ", R.fit_pattern.similarity), R.fit_pattern.hybrid_with && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: T.mut, marginLeft: 8 } }, "hybrid with ", FIT_PATTERNS.find((p) => p.code === R.fit_pattern.hybrid_with)?.label)), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement("strong", null, "Characteristic failure mode:"), " ", R.fit_pattern.failure_mode), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4 } }, /* @__PURE__ */ React.createElement("strong", null, "Remedy:"), " ", R.fit_pattern.remedy))), R.risk_flags.length > 0 && /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Risk flags"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.risk_flags.map((f) => /* @__PURE__ */ React.createElement("div", { key: f.code, style: { background: T.surface, border: `1px solid ${T.line}`, borderLeft: `4px solid ${f.severity === "high" ? T.red : f.severity === "medium" ? T.amber : T.mut}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("strong", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 } }, f.code), " \u2014 ", f.message, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, marginTop: 3 } }, f.evidence.join(" \xB7 ")))))), R.complementarity_spec.length > 0 && /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Complementarity spec \u2014 what the co-founder or hire must bring"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.complementarity_spec.map((c) => /* @__PURE__ */ React.createElement("div", { key: c.dimension, style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("strong", { style: { fontFamily: "'IBM Plex Mono', monospace" } }, c.dimension, " \u2265 ", c.min_percentile), " \u2014 ", c.rationale)))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Narrative report"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", margin: "12px 0", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("select", { value: audience, onChange: (e) => setAudience(e.target.value), style: { padding: "8px 10px", border: `1px solid ${T.lineDark}`, borderRadius: 6, fontSize: 13, background: "#fff" } }, /* @__PURE__ */ React.createElement("option", { value: "decision_maker" }, "Decision-maker report"), /* @__PURE__ */ React.createElement("option", { value: "candidate" }, "Candidate-facing report")), /* @__PURE__ */ React.createElement(Btn, { small: true, kind: "primary", onClick: generateNarrative, disabled: narrLoading }, narrLoading ? "Writing\u2026" : "Generate narrative (LLM, prompt v1.0.0)")), narrError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: T.amber, marginBottom: 10 } }, narrError), /* @__PURE__ */ React.createElement("div", { style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: 20, fontSize: 14.5, lineHeight: 1.7, whiteSpace: "pre-wrap" } }, narrative ?? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.1em" } }, "Deterministic fallback narrative"), `${candidateName || "The candidate"} scores ${R.ffi} (FFI) against ${asset.name}, placing in the ${BAND_LABELS[R.band]} band with anchor confidence ${R.anchor_confidence} of 5. ` + (R.gates.some((g) => !g.passed && !g.waived) ? "One or more gates failed: this candidate is not the anchor founder for this asset regardless of alignment elsewhere. " : "All active gates passed" + (R.gates.some((g) => g.waived) ? " (one waived)" : "") + ". ") + (strengths.length ? `Principal strengths against this asset: ${strengths.map((d) => d.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "C").length ? `Development priorities (capabilities, closable in 90\u2013180 days): ${R.gaps.filter((g) => g.group === "C").map((g) => g.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "P").length ? `Structural considerations (dispositions, to design around rather than train): ${R.gaps.filter((g) => g.group === "P").map((g) => g.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "J").length ? `Adjacency gaps: ${R.gaps.filter((g) => g.group === "J").map((g) => `${g.label} (${g.routes.map((r) => ROUTE_LABELS[r]).join(", ")})`).join("; ")}. ` : "") + `Fit pattern: ${R.fit_pattern.label}. Characteristic failure mode: ${R.fit_pattern.failure_mode} Remedy: ${R.fit_pattern.remedy}`))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Btn, { kind: "ghost", onClick: () => {
+        /* @__PURE__ */ React.createElement("div", null, saveStatusBanner, /* @__PURE__ */ React.createElement("div", { style: { background: T.dark, color: "#E8EBE6", borderRadius: 10, padding: "26px 26px 22px", marginBottom: 26 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 20 } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: "#8B94A1" } }, "FounderFit report \xB7 ", candidateName || "Candidate", " \xD7 ", asset.name), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 18, marginTop: 12, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 56, fontWeight: 600, lineHeight: 1 } }, R.ffi), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, color: "#8B94A1", marginLeft: 6 } }, "/ 100 FFI")), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: bandColor === T.red ? "#F2A69E" : bandColor === T.amber ? "#E8C27A" : "#7ED0B4" } }, BAND_LABELS[R.band]), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: "#B9C1CC", maxWidth: 460, lineHeight: 1.5 } }, BAND_DESC[R.band])))), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B94A1", textAlign: "right", lineHeight: 1.9 } }, "anchor confidence ", R.anchor_confidence, "/5", /* @__PURE__ */ React.createElement("br", null), "validity: ", /* @__PURE__ */ React.createElement("span", { style: { color: R.validity.status === "clean" ? "#7ED0B4" : R.validity.status === "flagged" ? "#E8C27A" : "#F2A69E" } }, R.validity.status), /* @__PURE__ */ React.createElement("br", null), "pattern: ", R.fit_pattern.label, R.fit_pattern.hybrid_with ? ` / ${FIT_PATTERNS.find((p) => p.code === R.fit_pattern.hybrid_with)?.label}` : ""))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Gates \u2014 pass/fail conditions for the anchor role"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.gates.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.code, style: { display: "flex", gap: 12, alignItems: "flex-start", background: T.surface, border: `1px solid ${T.line}`, borderLeft: `4px solid ${g.passed ? T.accent : g.waived ? T.amber : T.red}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 600, color: g.passed ? T.accent : g.waived ? T.amber : T.red, minWidth: 62 } }, g.passed ? "PASS" : g.waived ? "WAIVED" : "FAIL"), /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("strong", null, g.code.replace("GATE_", "")), g.dimension ? ` (${g.dimension} \u2265 ${g.threshold})` : "", " \u2014 ", g.reason, g.waiver_note && /* @__PURE__ */ React.createElement("em", { style: { display: "block", color: T.mut, marginTop: 2 } }, "Waiver: ", g.waiver_note)))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Dimension profile \u2014 actual vs. demand (tick = what this asset requires)"), groups.map(([g, title]) => /* @__PURE__ */ React.createElement("div", { key: g, style: { marginTop: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, marginBottom: 10 } }, title), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 9 } }, R.dimensions.filter((d) => d.group === g).map((d) => /* @__PURE__ */ React.createElement("div", { key: d.code, style: { display: "grid", gridTemplateColumns: "minmax(180px, 260px) 1fr 140px", gap: 12, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, lineHeight: 1.35 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", color: T.mut, marginRight: 6 } }, d.code), d.label), /* @__PURE__ */ React.createElement(ReadoutBar, { percentile: d.percentile, demand: d.demand_level, group: d.group }), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: T.mut, textAlign: "right" } }, d.percentile.toFixed(0), " vs ", d.demand_level, " \xB7 w", d.weight.toFixed(1)))))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Talents against this asset"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, strengths.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, color: T.mut } }, "No dimension meaningfully exceeds this asset's demand profile."), strengths.map((d) => /* @__PURE__ */ React.createElement("div", { key: d.code, style: { background: T.accentSoft, border: `1px solid ${T.accent}33`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.5 } }, /* @__PURE__ */ React.createElement("strong", null, d.label), " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: T.mut } }, "(", d.code, " \xB7 ", d.percentile.toFixed(0), ", demand ", d.demand_level, ")"), /* @__PURE__ */ React.createElement("div", { style: { color: "#33413B", marginTop: 2 } }, FALLBACK.strength[d.code]))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Gap ledger \u2014 what falls short of this venture's demand, and what to do about it"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.gaps.length === 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13.5, color: T.mut } }, "No gaps at or above the reporting threshold."), R.gaps.map((g) => /* @__PURE__ */ React.createElement("div", { key: g.dimension, style: { background: sevBg[g.severity], border: `1px solid ${sevColor[g.severity]}33`, borderRadius: 6, padding: "12px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 } }, /* @__PURE__ */ React.createElement("strong", null, g.label, " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, fontWeight: 400, color: T.mut } }, "(", g.dimension, ")")), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 600, color: sevColor[g.severity], textTransform: "uppercase", letterSpacing: "0.08em" } }, g.severity, " \xB7 shortfall ", g.shortfall.toFixed(0))), /* @__PURE__ */ React.createElement("div", { style: { color: "#4A4438", marginTop: 3 } }, FALLBACK.gap[g.dimension]), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" } }, g.routes.map((r) => /* @__PURE__ */ React.createElement("span", { key: r, style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, border: `1px solid ${sevColor[g.severity]}55`, borderRadius: 4, padding: "2px 7px", color: sevColor[g.severity] } }, ROUTE_LABELS[r]))))))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Fit pattern"), /* @__PURE__ */ React.createElement("div", { style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: 18, marginTop: 12, fontSize: 14, lineHeight: 1.6 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 17, fontWeight: 700 } }, R.fit_pattern.label, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, fontWeight: 400, color: T.mut, marginLeft: 10 } }, "similarity ", R.fit_pattern.similarity), R.fit_pattern.hybrid_with && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, fontWeight: 500, color: T.mut, marginLeft: 8 } }, "hybrid with ", FIT_PATTERNS.find((p) => p.code === R.fit_pattern.hybrid_with)?.label)), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 8 } }, /* @__PURE__ */ React.createElement("strong", null, "Characteristic failure mode:"), " ", R.fit_pattern.failure_mode), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 4 } }, /* @__PURE__ */ React.createElement("strong", null, "Remedy:"), " ", R.fit_pattern.remedy))), R.risk_flags.length > 0 && /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Risk flags"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.risk_flags.map((f) => /* @__PURE__ */ React.createElement("div", { key: f.code, style: { background: T.surface, border: `1px solid ${T.line}`, borderLeft: `4px solid ${f.severity === "high" ? T.red : f.severity === "medium" ? T.amber : T.mut}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("strong", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12 } }, f.code), " \u2014 ", f.message, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, marginTop: 3 } }, f.evidence.join(" \xB7 ")))))), R.complementarity_spec.length > 0 && /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Complementarity spec \u2014 what the co-founder or hire must bring"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gap: 8, marginTop: 12 } }, R.complementarity_spec.map((c) => /* @__PURE__ */ React.createElement("div", { key: c.dimension, style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 6, padding: "11px 14px", fontSize: 13.5, lineHeight: 1.55 } }, /* @__PURE__ */ React.createElement("strong", { style: { fontFamily: "'IBM Plex Mono', monospace" } }, c.dimension, " \u2265 ", c.min_percentile), " \u2014 ", c.rationale)))), /* @__PURE__ */ React.createElement("section", { style: { marginBottom: 28 } }, /* @__PURE__ */ React.createElement(Eyebrow, null, "Narrative report"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", margin: "12px 0", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("select", { value: audience, onChange: (e) => setAudience(e.target.value), style: { padding: "8px 10px", border: `1px solid ${T.lineDark}`, borderRadius: 6, fontSize: 13, background: "#fff" } }, /* @__PURE__ */ React.createElement("option", { value: "decision_maker" }, "Decision-maker report"), /* @__PURE__ */ React.createElement("option", { value: "candidate" }, "Candidate-facing report")), /* @__PURE__ */ React.createElement(Btn, { small: true, kind: "primary", onClick: generateNarrative, disabled: narrLoading }, narrLoading ? "Writing\u2026" : "Generate narrative (LLM, prompt v1.0.0)")), narrError && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12.5, color: T.amber, marginBottom: 10 } }, narrError), /* @__PURE__ */ React.createElement("div", { style: { background: T.surface, border: `1px solid ${T.line}`, borderRadius: 8, padding: 20, fontSize: 14.5, lineHeight: 1.7, whiteSpace: "pre-wrap" } }, narrative ?? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: T.mut, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.1em" } }, "Deterministic fallback narrative"), `${candidateName || "The candidate"} scores ${R.ffi} (FFI) against ${asset.name}, placing in the ${BAND_LABELS[R.band]} band with anchor confidence ${R.anchor_confidence} of 5. ` + (R.gates.some((g) => !g.passed && !g.waived) ? "One or more gates failed: this candidate is not the anchor founder for this asset regardless of alignment elsewhere. " : "All active gates passed" + (R.gates.some((g) => g.waived) ? " (one waived)" : "") + ". ") + (strengths.length ? `Principal strengths against this asset: ${strengths.map((d) => d.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "C").length ? `Development priorities (capabilities, closable in 90\u2013180 days): ${R.gaps.filter((g) => g.group === "C").map((g) => g.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "P").length ? `Structural considerations (dispositions, to design around rather than train): ${R.gaps.filter((g) => g.group === "P").map((g) => g.label).join("; ")}. ` : "") + (R.gaps.filter((g) => g.group === "J").length ? `Adjacency gaps: ${R.gaps.filter((g) => g.group === "J").map((g) => `${g.label} (${g.routes.map((r) => ROUTE_LABELS[r]).join(", ")})`).join("; ")}. ` : "") + `Fit pattern: ${R.fit_pattern.label}. Characteristic failure mode: ${R.fit_pattern.failure_mode} Remedy: ${R.fit_pattern.remedy}`))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement(Btn, { kind: "ghost", onClick: () => {
           setStep("intro");
           setFcAnswers({});
           setScAnswers({});
@@ -1321,5 +1305,9 @@ Write these sections, each under a plain heading: Executive Summary (3-5 sentenc
   }
 
 export default function Page() {
-  return <FounderFitAssessment />;
+  return (
+    <AuthGate>
+      <FounderFitAssessment />
+    </AuthGate>
+  );
 }
