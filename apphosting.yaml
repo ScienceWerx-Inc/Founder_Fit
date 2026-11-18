@@ -1,6 +1,7 @@
 # Firebase App Hosting config for founder-fit-6a455 (backend "founder-fit" in us-east4; the region is fixed when a backend is created).
 # Docs: https://firebase.google.com/docs/app-hosting/configure
-# No secrets here: Vertex AI uses the backend's service account (ADC). GEMINI_API_KEY is local-dev only and must never be added.
+# Vertex AI uses the backend's service account (ADC). GEMINI_API_KEY is local-dev only and must never be added.
+# The only secret is OBSERVABILITY_TOKEN, held in Cloud Secret Manager (never its value here).
 
 runConfig:
   minInstances: 0
@@ -34,4 +35,11 @@ env:
     availability: [RUNTIME]
   - variable: GEMINI_MODEL
     value: gemini-3.5-flash
+    availability: [RUNTIME]
+
+  # ScienceWerx observability: request metrics and server errors go to the portal's Monitoring page.
+  # Create the secret before deploying: firebase apphosting:secrets:set OBSERVABILITY_TOKEN
+  # (then grant the backend access when asked, or: firebase apphosting:secrets:grantaccess OBSERVABILITY_TOKEN --backend founder-fit)
+  - variable: OBSERVABILITY_TOKEN
+    secret: OBSERVABILITY_TOKEN
     availability: [RUNTIME]
