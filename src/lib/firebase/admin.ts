@@ -1,5 +1,6 @@
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 
 // Server-only. verifyIdToken needs just the project id (it checks Google's public keys), no credentials.
 // On App Hosting, FIREBASE_CONFIG is injected and initializeApp() picks it up.
@@ -12,4 +13,12 @@ function adminApp() {
 
 export function verifyFirebaseIdToken(idToken: string) {
   return getAuth(adminApp()).verifyIdToken(idToken);
+}
+
+/**
+ * Health check for /api/health: one read of an empty collection, which proves Firestore is
+ * reachable with the server's credentials (Application Default Credentials on App Hosting).
+ */
+export function pingFirestore() {
+  return getFirestore(adminApp()).collection("_health").limit(1).get();
 }
