@@ -41,7 +41,13 @@ export interface Flusher {
 export function startFlusher(
   collector: Collector,
   transport: Transport,
-  options: { intervalMs?: number; soonMs?: number; onError?: (error: unknown) => void } = {},
+  options: {
+    intervalMs?: number;
+    soonMs?: number;
+    onError?: (error: unknown) => void;
+    /** Runs before each batch is taken, to move anything still held into the collector. */
+    beforeFlush?: () => void;
+  } = {},
 ): Flusher {
   const intervalMs = options.intervalMs ?? 60_000;
   const soonMs = options.soonMs ?? 10_000;
@@ -51,6 +57,7 @@ export function startFlusher(
 
   const flush = (): Promise<void> => {
     if (inFlight) return inFlight;
+    options.beforeFlush?.();
     const batch = collector.drain();
     if (!batch) return Promise.resolve();
     inFlight = transport

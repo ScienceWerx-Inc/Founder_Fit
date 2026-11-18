@@ -8,7 +8,7 @@
  * export const dynamic = "force-dynamic";
  * export const GET = createHealthHandler({
  *   service: "grant-align-web",
- *   checks: { firestore: () => db.collection("_health").limit(1).get() },
+ *   checks: { database: () => pingDatabase() }, // e.g. read one small document
  * });
  * ```
  *

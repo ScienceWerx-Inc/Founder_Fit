@@ -61,6 +61,7 @@ export function serializeError(
   const out: SerializedError = { name: error.name, message: error.message, stack: error.stack };
   const code = (error as { code?: unknown }).code;
   if (code !== undefined) out.code = code;
-  if (error.cause !== undefined) out.cause = mapCause(error.cause);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause !== undefined) out.cause = mapCause(cause);
   return out;
 }

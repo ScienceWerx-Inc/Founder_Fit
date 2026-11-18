@@ -129,8 +129,8 @@ export class Collector {
       ...(this.options.release ? { release: this.options.release } : {}),
       instance: this.instance,
       window: { start: this.windowStart.toISOString(), end: end.toISOString() },
-      routes: [...this.routes.values()],
-      errors: [...this.errors.values()],
+      routes: Array.from(this.routes.values()),
+      errors: Array.from(this.errors.values()),
     };
     this.routes.clear();
     this.errors.clear();
@@ -219,7 +219,7 @@ export function fingerprintOf(name: string, message: string, stack?: string, rou
 
 /**
  * 64-bit hash as 16 hex chars, from two 32-bit FNV-1a passes with different offsets. Plain JS
- * without BigInt or `node:crypto`, so it bundles for any runtime and any TS target. Not
+ * without BigInt or `node:crypto`, so it bundles for any runtime. Not
  * cryptographic; it only has to group identical errors.
  */
 export function hash64(text: string): string {

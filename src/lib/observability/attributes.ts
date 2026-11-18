@@ -22,7 +22,13 @@ export type AttrName = (typeof Attr)[keyof typeof Attr];
 /** Canonical deployment environment names. */
 export type DeploymentEnv = "development" | "staging" | "production";
 
-export function resolveEnv(value = process.env.APP_ENV ?? process.env.NODE_ENV): DeploymentEnv {
+/**
+ * APP_ENV wins; then Vercel's VERCEL_ENV (previews run with NODE_ENV=production but are not
+ * production); then NODE_ENV.
+ */
+export function resolveEnv(
+  value = process.env.APP_ENV ?? process.env.VERCEL_ENV ?? process.env.NODE_ENV,
+): DeploymentEnv {
   if (value === "production" || value === "prod") return "production";
   if (value === "staging" || value === "preview") return "staging";
   return "development";
