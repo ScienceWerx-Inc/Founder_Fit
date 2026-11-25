@@ -37,7 +37,10 @@ src/app/AuthGate.tsx              Google sign-in gate, sign-out, useAuth()
 src/app/theme.ts                  Shared color tokens
 src/app/api/narrative/route.ts    POST /api/narrative (server only)
 src/app/api/access/route.ts       GET /api/access: is this account allowed? (used by AuthGate)
+src/app/api/connect/              ScienceWerx Connect: v1/summary (provider) and peers (consumer)
+src/app/ConnectedApps.tsx         "Connected apps" panel on the signed-in home screen
 src/lib/access/                   Allowlist policy and the access-check handler
+src/lib/connect/                  ScienceWerx Connect env parsing, caller check, peer client, handlers
 src/lib/firebase/client.ts        Firebase web SDK (auth, Firestore)
 src/lib/firebase/admin.ts         Firebase Admin SDK (ID token verification)
 src/lib/assessments.ts            createAssessment() and saveNarrative()
@@ -132,9 +135,32 @@ Next.js only exposes variables prefixed with `NEXT_PUBLIC_` to the browser. The 
 | `FOUNDERFIT_ALLOWED_DOMAINS` | server | in production | Comma-separated email domains allowed to use the app, e.g. `sciencewerx.org`. See [Access allowlist](#access-allowlist). |
 | `FOUNDERFIT_ALLOWED_EMAILS` | server | no | Comma-separated individual email addresses allowed to use the app. |
 | `FOUNDERFIT_NARRATIVE_DAILY_LIMIT` | server | no | Narrative calls per user per UTC day, default `30`. |
+| `CONNECT_KEY` | server (secret) | no | This app's ScienceWerx Connect caller key. See [ScienceWerx Connect](#sciencewerx-connect). |
+| `CONNECT_PEERS` | server | no | Peers FounderFit calls, `name=https://base-url`, comma-separated. |
+| `CONNECT_CALLERS` | server | no | Apps allowed to call FounderFit, `name:sha256hex:scope\|scope`, comma-separated. |
+| `FOUNDERFIT_PUBLIC_URL` | server | no | Link on FounderFit's card in other apps, default the production URL. |
 | `NEXT_PUBLIC_FIRESTORE_EMULATOR_HOST` | browser | no | **Local development only.** Points the app at a local Firestore emulator, e.g. `127.0.0.1:8085`. |
 
 Never commit `.env.local`, never prefix `GEMINI_API_KEY` with `NEXT_PUBLIC_`, and never add it to `apphosting.yaml`.
+
+## ScienceWerx Connect
+
+ScienceWerx apps (Prism School, iStartup, FounderFit, InkKeep, InkGuard) each keep their own database and sign-in, and share a small summary of the same person **server to server**, matched by **verified email**. An app only ever asks about the person signed in to it right now; there is no listing or search of other people. Browsers never call a peer: they call their own app's `/api/connect/peers`.
+
+**FounderFit as a provider.** `GET /api/connect/v1/summary` with `Authorization: Bearer swc_…` and `X-Connect-Subject: person@example.com`. The key's SHA-256 must match a `CONNECT_CALLERS` entry with the `summary` scope (401/403 otherwise; 400 for a malformed subject). The subject's Firebase account must exist with a verified email and have at least one assessment, otherwise the answer is `200 {"found": false}`. The card shows the latest assessment's FFI score and band (plus validity when not clean), its date, and up to five lines: venture, candidate, strongest area, biggest gap, fit pattern. The narrative and the raw report are never returned. Calls are logged with the caller name and a hash of the subject, never the email.
+
+The provider does **not** check FounderFit's allowlist (`FOUNDERFIT_ALLOWED_*`). The allowlist decides who may use FounderFit; a Connect summary is the person reading their own existing result inside another ScienceWerx app that has already verified their email, and it grants no access to FounderFit itself.
+
+**FounderFit as a consumer.** `GET /api/connect/peers` needs a Firebase ID token whose email is verified and on the allowlist. It calls iStartup's summary and Prism School's and iStartup's certificates in parallel (4 s timeout each, redirects not followed), checks and caps every field, and returns `{ cards, certificates }`. A peer that is unconfigured, down, slow or refusing is just missing. The "Connected apps" panel on the home screen shows the result and is hidden when there is nothing.
+
+**Setup.** Generate this app's key and give its SHA-256 to the apps that should accept it:
+
+```bash
+node -e 'console.log("swc_" + require("crypto").randomBytes(32).toString("base64url"))'   # CONNECT_KEY (secret)
+node -e 'console.log(require("crypto").createHash("sha256").update(process.argv[1]).digest("hex"))' swc_...   # for their CONNECT_CALLERS
+```
+
+In production, store `CONNECT_KEY` with `firebase apphosting:secrets:set CONNECT_KEY` and grant the backend access, then uncomment the Connect entries in `apphosting.yaml`. Leave the `CONNECT_KEY` entry commented until the secret exists, or the rollout fails. With nothing configured, Connect is off: FounderFit calls nobody and answers every caller with 401.
 
 ## AI narrative locally
 
@@ -154,8 +180,8 @@ If the call fails, the report shows the deterministic fallback narrative instead
 ## Tests
 
 ```bash
-npm test                 # unit tests: narrative route, allowlist, daily limit, access check, Gemini client (mocked, no network)
-npm run test:firestore   # Firestore rules, save and daily-limit counter tests in the local emulator
+npm test                 # unit tests: narrative route, allowlist, daily limit, access check, Gemini client, ScienceWerx Connect (mocked, no network)
+npm run test:firestore   # Firestore rules, save, daily-limit counter and Connect summary read tests in the local emulator
 ```
 
 `npm run test:firestore` starts the Firestore emulator under the offline project ID `demo-founder-fit` on port 8085, so it never touches the real database. It needs the Firebase CLI and Java 21+.
