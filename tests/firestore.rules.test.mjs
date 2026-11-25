@@ -132,3 +132,22 @@ describe("delete and other paths", () => {
     await assertFails(setDoc(doc(alice(), "anything/x"), { a: 1 }));
   });
 });
+
+describe("narrativeUsage (server-only daily counters)", () => {
+  beforeEach(() =>
+    env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "narrativeUsage/alice_2026-11-25"), { uid: "alice", day: "2026-11-25", count: 30 });
+    })
+  );
+  test("the owner can't read, reset, delete or create their counter", async () => {
+    await assertFails(getDoc(doc(alice(), "narrativeUsage/alice_2026-11-25")));
+    await assertFails(setDoc(doc(alice(), "narrativeUsage/alice_2026-11-25"), { uid: "alice", day: "2026-11-25", count: 0 }));
+    await assertFails(updateDoc(doc(alice(), "narrativeUsage/alice_2026-11-25"), { count: 0 }));
+    await assertFails(deleteDoc(doc(alice(), "narrativeUsage/alice_2026-11-25")));
+    await assertFails(setDoc(doc(alice(), "narrativeUsage/alice_2026-11-26"), { uid: "alice", count: 0 }));
+  });
+  test("nobody can list the collection", async () => {
+    await assertFails(getDocs(collection(alice(), "narrativeUsage")));
+    await assertFails(getDocs(collection(anon(), "narrativeUsage")));
+  });
+});

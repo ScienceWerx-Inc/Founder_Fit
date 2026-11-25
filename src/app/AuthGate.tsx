@@ -2,10 +2,16 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { FirebaseError } from "firebase/app";
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { ACCESS_DENIED_MESSAGES } from "@/lib/access/policy";
 import { auth } from "@/lib/firebase/client";
 import { T } from "./theme";
 
-type AuthContextValue = { user: User; signOut: () => Promise<void> };
+type AuthContextValue = {
+  user: User;
+  signOut: () => Promise<void>;
+  /** Call when a server route answers 403: shows the "account isn't allowed" screen. */
+  reportAccessDenied: (message?: string) => void;
+};
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -101,9 +107,61 @@ function SignInScreen() {
   );
 }
 
+const DEFAULT_DENIED_MESSAGE = ACCESS_DENIED_MESSAGES.not_allowed;
+
+function NotAllowedScreen({ email, message }: { email: string | null; message: string }) {
+  const [pending, setPending] = useState(false);
+  return (
+    <Screen>
+      <div style={{ width: "100%", maxWidth: 420, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 10, padding: "36px 32px", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, textAlign: "center" }}>
+        <Logo />
+        <p role="alert" style={{ fontSize: 14, lineHeight: 1.6, color: T.red, background: T.redSoft, borderRadius: 6, padding: "12px 14px", margin: 0, width: "100%" }}>
+          {message}
+        </p>
+        {email && (
+          <p style={{ fontSize: 13, color: T.mut, margin: 0 }}>
+            Signed in as <span style={{ fontFamily: MONO }}>{email}</span>
+          </p>
+        )}
+        <button
+          onClick={() => {
+            setPending(true);
+            signOut(auth).catch(() => setPending(false));
+          }}
+          disabled={pending}
+          style={{ width: "100%", fontFamily: SANS, fontWeight: 600, fontSize: 15, padding: "12px 22px", borderRadius: 6, border: `1px solid ${T.ink}`, background: T.ink, color: "#fff", cursor: pending ? "not-allowed" : "pointer", opacity: pending ? 0.6 : 1 }}
+        >
+          {pending ? "Signing out…" : "Sign out and use another account"}
+        </button>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: T.mut }}>ScienceWerx</span>
+      </div>
+    </Screen>
+  );
+}
+
+type AccessState = { uid: string; status: "checking" | "allowed" | "denied"; message?: string };
+
+// Asks the server (same allowlist as /api/narrative) whether this account may use the app. Only a
+// 403 blocks: if the check itself fails, the app still opens and the server keeps enforcing access.
+async function checkServerAccess(user: User): Promise<Omit<AccessState, "uid">> {
+  try {
+    const idToken = await user.getIdToken();
+    const res = await fetch("/api/access", { headers: { Authorization: `Bearer ${idToken}` }, cache: "no-store" });
+    if (res.status === 403) {
+      const data = await res.json().catch(() => ({}));
+      return { status: "denied", message: typeof data.message === "string" ? data.message : DEFAULT_DENIED_MESSAGE };
+    }
+    if (!res.ok) console.warn(`Access check returned ${res.status}; continuing (the server still enforces access).`);
+  } catch (e) {
+    console.warn("Access check failed; continuing (the server still enforces access):", e);
+  }
+  return { status: "allowed" };
+}
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [access, setAccess] = useState<AccessState | null>(null);
 
   useEffect(
     () =>
@@ -114,6 +172,18 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     []
   );
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    setAccess({ uid: user.uid, status: "checking" });
+    checkServerAccess(user).then((result) => {
+      if (!cancelled) setAccess({ uid: user.uid, ...result });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   if (loading) {
     return (
       <Screen>
@@ -122,6 +192,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
   if (!user) return <SignInScreen />;
+  if (!access || access.uid !== user.uid || access.status === "checking") {
+    return (
+      <Screen>
+        <span style={{ fontFamily: MONO, fontSize: 12, color: T.mut }}>Checking access…</span>
+      </Screen>
+    );
+  }
+  if (access.status === "denied") return <NotAllowedScreen email={user.email} message={access.message ?? DEFAULT_DENIED_MESSAGE} />;
 
-  return <AuthContext.Provider value={{ user, signOut: () => signOut(auth) }}>{children}</AuthContext.Provider>;
+  const reportAccessDenied = (message?: string) =>
+    setAccess({ uid: user.uid, status: "denied", message: message || DEFAULT_DENIED_MESSAGE });
+  return <AuthContext.Provider value={{ user, signOut: () => signOut(auth), reportAccessDenied }}>{children}</AuthContext.Provider>;
 }

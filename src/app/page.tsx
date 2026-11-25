@@ -832,7 +832,7 @@ const CONSTANTS = {
     return /* @__PURE__ */ React.createElement("div", { style: { position: "relative", height: 20, background: "#EDEFE9", borderRadius: 3, overflow: "visible" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: 0, borderRadius: 3, overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", left: 0, top: 0, bottom: 0, width: `${percentile}%`, background: barColor, opacity: 0.85, borderRadius: 3 } })), /* @__PURE__ */ React.createElement("div", { title: `demand ${demand}`, style: { position: "absolute", left: `${demand}%`, top: -4, bottom: -4, width: 2, background: T.ink } }));
   }
   function FounderFitAssessment() {
-    const { user, signOut } = useAuth();
+    const { user, signOut, reportAccessDenied } = useAuth();
     const [step, setStep] = useState("intro");
     const [assetId, setAssetId] = useState(PRESET_ASSETS[0].id);
     const [assetScores, setAssetScores] = useState({ ...PRESET_ASSETS[0].scores });
@@ -1012,6 +1012,16 @@ const CONSTANTS = {
           body: JSON.stringify({ audience, candidateName, asset_context, result: output.result })
         });
         const data = await response.json().catch(() => ({}));
+        if (response.status === 403) {
+          reportAccessDenied(data.message);
+          return;
+        }
+        if (response.status === 429) {
+          setNarrError(`${data.message ?? "Daily narrative limit reached."} Showing the deterministic fallback narrative below.`);
+          setNarrative(null);
+          setNarrLoading(false);
+          return;
+        }
         if (!response.ok || !data.narrative) throw new Error(`Narrative request failed (${response.status}${data.error ? `: ${data.error}` : ""})`);
         setNarrative(data.narrative);
         // Attach it to the saved assessment; the report still shows it if this save fails.
