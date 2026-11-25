@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AuthGate, useAuth } from './AuthGate';
+import { ConnectedApps } from './ConnectedApps';
 import { db } from '@/lib/firebase/client';
 import { createAssessment, saveNarrative } from '@/lib/assessments';
 import { T } from './theme';
@@ -1084,6 +1085,7 @@ const CONSTANTS = {
           )
         ),
         /* @__PURE__ */ React.createElement("main", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 20px", textAlign: "center" } },
+          /* @__PURE__ */ React.createElement(ConnectedApps, null),
           /* @__PURE__ */ React.createElement("div", { style: { display: "inline-block", padding: "6px 14px", border: `1px solid ${T.accent}40`, borderRadius: 20, color: T.accent, fontWeight: 600, fontSize: 13, marginBottom: 24, fontFamily: "'IBM Plex Mono', monospace" } }, "v2.0 — Two-Sided Matching Engine"),
           /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "clamp(36px, 5vw, 64px)", lineHeight: 1.1, fontWeight: 800, letterSpacing: "-0.03em", maxWidth: 900, marginBottom: 24 } }, "Not “is this person a founder?”", /* @__PURE__ */ React.createElement("br", null), "But “is this the founder for ", /* @__PURE__ */ React.createElement("span", { style: { color: T.accent } }, "this"), " asset?”"),
           /* @__PURE__ */ React.createElement("p", { style: { fontSize: "clamp(16px, 2vw, 22px)", lineHeight: 1.6, color: T.mut, maxWidth: 700, marginBottom: 60 } }, "This assessment rigorously evaluates candidates against a specific, already-validated technology asset to identify true structural fit, capabilities, and adjacency."),

@@ -20,6 +20,17 @@ export function verifyFirebaseIdToken(idToken: string) {
   return getAuth(adminApp()).verifyIdToken(idToken);
 }
 
+/** Looks up a Firebase Auth account by email (ScienceWerx Connect); null when there is none. */
+export async function findUserByEmail(email: string) {
+  try {
+    const user = await getAuth(adminApp()).getUserByEmail(email);
+    return { uid: user.uid, email: user.email, emailVerified: user.emailVerified };
+  } catch (error) {
+    if ((error as { code?: string })?.code === "auth/user-not-found") return null;
+    throw error;
+  }
+}
+
 /**
  * Health check for /api/health: one read of an empty collection, which proves Firestore is
  * reachable with the server's credentials (Application Default Credentials on App Hosting).
