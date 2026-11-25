@@ -1,4 +1,4 @@
-// /api/narrative handler and Gemini request shape (Vertex AI and Developer API modes), with Firebase Admin and the SDK mocked (no network).
+// /api/narrative handler (auth, allowlist, daily limit), /api/access, and Gemini request shape (Vertex AI and Developer API modes), with Firebase Admin and the SDK mocked (no network).
 // Run with: npm test
 import { afterEach, beforeEach, describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
@@ -7,6 +7,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { MAX_BODY_BYTES, handleNarrativeRequest } from "../src/lib/narrative/handler.ts";
 import { NARRATIVE_SYSTEM_PROMPT } from "../src/lib/narrative/prompt.ts";
 import { verifyFirebaseIdToken } from "../src/lib/firebase/admin.ts";
+import { accessPolicyFromEnv, checkAccess } from "../src/lib/access/policy.ts";
+import { handleAccessRequest } from "../src/lib/access/handler.ts";
+import {
+  DEFAULT_NARRATIVE_DAILY_LIMIT,
+  narrativeDailyLimitFromEnv,
+  secondsUntilNextUtcDay,
+  utcDay,
+} from "../src/lib/narrative/quota.ts";
 
 const validBody = {
   audience: "decision_maker",
@@ -21,13 +29,30 @@ function request({ token = "good-token", body = validBody, raw, headers = {} } =
   return new Request("http://localhost/api/narrative", { method: "POST", headers: h, body: raw ?? JSON.stringify(body) });
 }
 
+// Token -> decoded claims, as verifyIdToken would return them.
+const TOKENS = {
+  "good-token": { uid: "alice", email: "alice@sciencewerx.org", email_verified: true },
+  "listed-token": { uid: "carol", email: "Carol.Guest@Gmail.com", email_verified: true },
+  "outsider-token": { uid: "mallory", email: "mallory@gmail.com", email_verified: true },
+  "unverified-token": { uid: "eve", email: "eve@sciencewerx.org", email_verified: false },
+  "no-email-token": { uid: "anon" },
+};
+
+const PROD_POLICY = accessPolicyFromEnv({
+  NODE_ENV: "production",
+  FOUNDERFIT_ALLOWED_DOMAINS: "sciencewerx.org",
+  FOUNDERFIT_ALLOWED_EMAILS: "carol.guest@gmail.com",
+});
+
 let deps;
 beforeEach(() => {
   deps = {
     verifyIdToken: mock.fn(async (t) => {
-      if (t !== "good-token") throw new Error("auth/argument-error");
-      return { uid: "alice" };
+      if (!(t in TOKENS)) throw new Error("auth/argument-error");
+      return TOKENS[t];
     }),
+    accessPolicy: PROD_POLICY,
+    consumeQuota: mock.fn(async () => ({ allowed: true, used: 1, limit: 30 })),
     generate: mock.fn(async () => "  Executive Summary\nThe candidate ...  "),
   };
   mock.method(console, "error", () => {});
@@ -57,6 +82,151 @@ describe("auth", () => {
     const res = await handleNarrativeRequest(request({ token: "not-a-real-jwt" }), { ...deps, verifyIdToken: verifyFirebaseIdToken });
     assert.equal(res.status, 401);
     assert.equal(deps.generate.mock.callCount(), 0);
+  });
+});
+
+describe("allowlist", () => {
+  test("an allowed domain account gets a narrative", async () => {
+    const res = await handleNarrativeRequest(request(), deps);
+    assert.equal(res.status, 200);
+    assert.deepEqual(deps.consumeQuota.mock.calls[0].arguments, ["alice"]);
+  });
+  test("an individually allowed email gets a narrative (case-insensitive)", async () => {
+    const res = await handleNarrativeRequest(request({ token: "listed-token" }), deps);
+    assert.equal(res.status, 200);
+  });
+  test("403 for a signed-in account that isn't allowed; quota and model untouched", async () => {
+    const res = await handleNarrativeRequest(request({ token: "outsider-token" }), deps);
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.error, "forbidden");
+    assert.equal(body.reason, "not_allowed");
+    assert.match(body.message, /isn't allowed/);
+    assert.equal(deps.consumeQuota.mock.callCount(), 0);
+    assert.equal(deps.generate.mock.callCount(), 0);
+  });
+  test("403 for an unverified email, even on an allowed domain", async () => {
+    const res = await handleNarrativeRequest(request({ token: "unverified-token" }), deps);
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).reason, "email_not_verified");
+    assert.equal(deps.generate.mock.callCount(), 0);
+  });
+  test("403 for a token without an email", async () => {
+    const res = await handleNarrativeRequest(request({ token: "no-email-token" }), deps);
+    assert.equal(res.status, 403);
+  });
+  test("access is checked before the body is read (an outsider can't probe validation)", async () => {
+    const res = await handleNarrativeRequest(request({ token: "outsider-token", raw: "{not json" }), deps);
+    assert.equal(res.status, 403);
+  });
+});
+
+describe("access policy", () => {
+  const verified = (email) => ({ uid: "u", email, email_verified: true });
+  test("no allowlist in production: nobody is allowed (fail closed)", () => {
+    const p = accessPolicyFromEnv({ NODE_ENV: "production" });
+    assert.deepEqual(checkAccess(verified("alice@sciencewerx.org"), p), { allowed: false, reason: "not_allowed" });
+  });
+  test("no allowlist in development: any verified account is allowed, unverified still is not", () => {
+    for (const NODE_ENV of ["development", "test", undefined]) {
+      const p = accessPolicyFromEnv({ NODE_ENV, FOUNDERFIT_ALLOWED_EMAILS: " , ", FOUNDERFIT_ALLOWED_DOMAINS: "" });
+      assert.equal(checkAccess(verified("anyone@gmail.com"), p).allowed, true);
+      assert.equal(checkAccess({ uid: "u", email: "anyone@gmail.com", email_verified: false }, p).allowed, false);
+    }
+  });
+  test("a configured allowlist applies in development too", () => {
+    const p = accessPolicyFromEnv({ NODE_ENV: "development", FOUNDERFIT_ALLOWED_DOMAINS: "sciencewerx.org" });
+    assert.equal(checkAccess(verified("anyone@gmail.com"), p).allowed, false);
+  });
+  test("domains match exactly, case-insensitively, with or without a leading @", () => {
+    const p = accessPolicyFromEnv({ NODE_ENV: "production", FOUNDERFIT_ALLOWED_DOMAINS: " @ScienceWerx.org , example.com" });
+    assert.equal(checkAccess(verified("Bob@SCIENCEWERX.ORG"), p).allowed, true);
+    assert.equal(checkAccess(verified("x@example.com"), p).allowed, true);
+    assert.equal(checkAccess(verified("x@evil-sciencewerx.org"), p).allowed, false);
+    assert.equal(checkAccess(verified("x@sub.sciencewerx.org"), p).allowed, false);
+    assert.equal(checkAccess(verified("sciencewerx.org@gmail.com"), p).allowed, false);
+  });
+  test("email_verified must be exactly true", () => {
+    const p = accessPolicyFromEnv({ NODE_ENV: "production", FOUNDERFIT_ALLOWED_DOMAINS: "sciencewerx.org" });
+    assert.equal(checkAccess({ uid: "u", email: "a@sciencewerx.org", email_verified: "true" }, p).allowed, false);
+    assert.equal(checkAccess({ uid: "u", email: "a@sciencewerx.org" }, p).allowed, false);
+  });
+});
+
+describe("daily limit", () => {
+  test("429 with Retry-After when the caller's daily limit is used up; the model isn't called", async () => {
+    deps.consumeQuota = mock.fn(async () => ({ allowed: false, used: 30, limit: 30, retryAfterSeconds: 3600 }));
+    const res = await handleNarrativeRequest(request(), deps);
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get("retry-after"), "3600");
+    const body = await res.json();
+    assert.equal(body.error, "rate_limited");
+    assert.equal(body.limit, 30);
+    assert.match(body.message, /daily limit of 30/);
+    assert.equal(deps.generate.mock.callCount(), 0);
+  });
+  test("invalid requests don't use up quota", async () => {
+    await handleNarrativeRequest(request({ raw: "{not json" }), deps);
+    await handleNarrativeRequest(request({ body: { ...validBody, audience: "investor" } }), deps);
+    assert.equal(deps.consumeQuota.mock.callCount(), 0);
+  });
+  test("a failed generation still counts (the model was called)", async () => {
+    deps.generate = mock.fn(async () => {
+      throw new Error("boom");
+    });
+    const res = await handleNarrativeRequest(request(), deps);
+    assert.equal(res.status, 502);
+    assert.equal(deps.consumeQuota.mock.callCount(), 1);
+  });
+  test("503 when the quota store fails (fail closed), and the model isn't called", async () => {
+    deps.consumeQuota = mock.fn(async () => {
+      throw new Error("firestore unavailable");
+    });
+    const res = await handleNarrativeRequest(request(), deps);
+    assert.equal(res.status, 503);
+    assert.deepEqual(await res.json(), { error: "quota_unavailable" });
+    assert.equal(deps.generate.mock.callCount(), 0);
+  });
+  test("development may proceed when the quota store fails", async () => {
+    deps.consumeQuota = mock.fn(async () => {
+      throw new Error("no credentials");
+    });
+    const res = await handleNarrativeRequest(request(), { ...deps, allowWhenQuotaUnavailable: true });
+    assert.equal(res.status, 200);
+  });
+  test("FOUNDERFIT_NARRATIVE_DAILY_LIMIT parsing", (t) => {
+    t.mock.method(console, "warn", () => {});
+    assert.equal(narrativeDailyLimitFromEnv({}), DEFAULT_NARRATIVE_DAILY_LIMIT);
+    assert.equal(narrativeDailyLimitFromEnv({ FOUNDERFIT_NARRATIVE_DAILY_LIMIT: " 5 " }), 5);
+    for (const bad of ["0", "-1", "2.5", "lots"]) {
+      assert.equal(narrativeDailyLimitFromEnv({ FOUNDERFIT_NARRATIVE_DAILY_LIMIT: bad }), DEFAULT_NARRATIVE_DAILY_LIMIT);
+    }
+  });
+  test("the window is the UTC day", () => {
+    const now = new Date("2026-11-25T23:59:30.000Z");
+    assert.equal(utcDay(now), "2026-11-25");
+    assert.equal(secondsUntilNextUtcDay(now), 30);
+  });
+});
+
+describe("GET /api/access", () => {
+  const get = (token) =>
+    new Request("http://localhost/api/access", { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  test("200 for an allowed account", async () => {
+    const res = await handleAccessRequest(get("good-token"), deps);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { allowed: true });
+  });
+  test("403 with a message for an account that isn't allowed", async () => {
+    const res = await handleAccessRequest(get("outsider-token"), deps);
+    assert.equal(res.status, 403);
+    const body = await res.json();
+    assert.equal(body.reason, "not_allowed");
+    assert.ok(body.message);
+  });
+  test("401 without or with a bad token", async () => {
+    assert.equal((await handleAccessRequest(get(null), deps)).status, 401);
+    assert.equal((await handleAccessRequest(get("forged"), deps)).status, 401);
   });
 });
 

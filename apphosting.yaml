@@ -37,6 +37,21 @@ env:
     value: gemini-3.5-flash
     availability: [RUNTIME]
 
+  # Who may use FounderFit (checked by /api/access and /api/narrative). An account is allowed when its
+  # email is verified and matches FOUNDERFIT_ALLOWED_DOMAINS or FOUNDERFIT_ALLOWED_EMAILS (comma-separated,
+  # case-insensitive). With both unset, production allows nobody.
+  - variable: FOUNDERFIT_ALLOWED_DOMAINS
+    value: sciencewerx.org
+    availability: [RUNTIME]
+  # To allow individual accounts outside the domain, uncomment and list them:
+  # - variable: FOUNDERFIT_ALLOWED_EMAILS
+  #   value: "someone@gmail.com, other@partner.com"
+  #   availability: [RUNTIME]
+  # Narrative calls per user per UTC day (counters in the server-only Firestore collection narrativeUsage).
+  - variable: FOUNDERFIT_NARRATIVE_DAILY_LIMIT
+    value: "30"
+    availability: [RUNTIME]
+
   # ScienceWerx observability: request metrics and server errors go to the portal's Monitoring page.
   # Create the secret before deploying: firebase apphosting:secrets:set OBSERVABILITY_TOKEN
   # (then grant the backend access when asked, or: firebase apphosting:secrets:grantaccess OBSERVABILITY_TOKEN --backend founder-fit)

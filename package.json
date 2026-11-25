@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --experimental-strip-types --experimental-test-module-mocks --import ./tests/support/register-ts.mjs --test tests/narrative-route.test.mjs",
-    "test:firestore": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --experimental-strip-types --import ./tests/support/register-ts.mjs --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/save-assessment.test.mjs\""
+    "test:firestore": "firebase emulators:exec --only firestore --project demo-founder-fit \"node --experimental-strip-types --import ./tests/support/register-ts.mjs --test --test-concurrency=1 tests/firestore.rules.test.mjs tests/save-assessment.test.mjs tests/narrative-quota.test.mjs\""
   },
   "dependencies": {
     "@google/genai": "^2.30.0",

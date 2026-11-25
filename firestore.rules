@@ -48,6 +48,10 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    // Per-user daily counters for /api/narrative. Written only by the server (Admin SDK, which bypasses
+    // these rules); clients may never read or change them, or they could reset their own limit.
+    match /narrativeUsage/{docId} { allow read, write: if false; }
+
     // Everything else is closed.
     match /{document=**} { allow read, write: if false; }
   }

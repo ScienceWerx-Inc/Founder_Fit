@@ -11,6 +11,11 @@ function adminApp() {
   );
 }
 
+/** Server-side Firestore (Admin SDK, bypasses the rules; used for collections clients can't touch). */
+export function adminFirestore() {
+  return getFirestore(adminApp());
+}
+
 export function verifyFirebaseIdToken(idToken: string) {
   return getAuth(adminApp()).verifyIdToken(idToken);
 }
@@ -20,5 +25,5 @@ export function verifyFirebaseIdToken(idToken: string) {
  * reachable with the server's credentials (Application Default Credentials on App Hosting).
  */
 export function pingFirestore() {
-  return getFirestore(adminApp()).collection("_health").limit(1).get();
+  return adminFirestore().collection("_health").limit(1).get();
 }
