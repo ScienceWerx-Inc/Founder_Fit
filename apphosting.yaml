@@ -62,22 +62,16 @@ env:
   # ScienceWerx Connect v1: share data with the other ScienceWerx apps server to server, matched by verified
   # email (see README "ScienceWerx Connect"). Off until configured: with these unset, /api/connect/peers
   # calls nobody and /api/connect/v1/summary answers every caller with 401.
-  # Real values are set at deploy time. Do not uncomment the CONNECT_KEY entry before the secret exists:
-  # a secret reference to a missing secret fails the rollout.
-  #   firebase apphosting:secrets:set CONNECT_KEY       (value: "swc_" + 43 base64url chars, from 32 random bytes)
-  #   firebase apphosting:secrets:grantaccess CONNECT_KEY --backend founder-fit
-  # - variable: CONNECT_KEY
-  #   secret: CONNECT_KEY
-  #   availability: [RUNTIME]
-  # Peers FounderFit calls (only istartup's summary and prismscore/istartup certificates are used):
-  # - variable: CONNECT_PEERS
-  #   value: "istartup=https://istartupscore.com,prismscore=https://www.prismscore.us"
-  #   availability: [RUNTIME]
+  # CONNECT_KEY is FounderFit's own caller key, in Secret Manager (apphosting:secrets:set CONNECT_KEY,
+  # then apphosting:secrets:grantaccess CONNECT_KEY --backend founder-fit).
+  - variable: CONNECT_KEY
+    secret: CONNECT_KEY
+    availability: [RUNTIME]
+  # Peers FounderFit calls (istartup's summary, prismscore/istartup certificates).
+  - variable: CONNECT_PEERS
+    value: "istartup=https://istartupscore.com,prismscore=https://www.prismscore.us"
+    availability: [RUNTIME]
   # Apps allowed to call FounderFit's summary: name:sha256hex-of-their-CONNECT_KEY:scopes (hashes only, not secret).
-  # - variable: CONNECT_CALLERS
-  #   value: "istartup:<sha256hex>:summary"
-  #   availability: [RUNTIME]
-  # Link used on FounderFit's card in other apps (defaults to the production URL below):
-  # - variable: FOUNDERFIT_PUBLIC_URL
-  #   value: https://founder-fit--founder-fit-6a455.us-east4.hosted.app
-  #   availability: [RUNTIME]
+  - variable: CONNECT_CALLERS
+    value: "istartup:09bef6c8aa1dd4ab2a37c617a85ce2cd986c1d73d0e4eb765a4d204695ef87b1:summary"
+    availability: [RUNTIME]
