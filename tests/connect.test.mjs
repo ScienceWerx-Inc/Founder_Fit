@@ -271,7 +271,7 @@ describe("peer response sanitizing", () => {
   });
 
   test("certificates: unknown status or bad link dropped", () => {
-    const good = { code: "PS-1", title: "Plan", issuer: "Prism School", status: "VALID", verifyUrl: "https://www.prismscore.us/verify/PS-1", issuedAt: "2026-01-01T00:00:00Z" };
+    const good = { code: "PS-1", title: "Plan", issuer: "PrismScore", status: "VALID", verifyUrl: "https://www.prismscore.us/verify/PS-1", issuedAt: "2026-01-01T00:00:00Z" };
     assert.equal(sanitizeCertificate(good).issuedAt, "2026-01-01T00:00:00.000Z");
     assert.equal(sanitizeCertificate(good).expiresAt, null);
     assert.equal(sanitizeCertificate({ ...good, status: "PENDING" }), null);

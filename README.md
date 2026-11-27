@@ -145,13 +145,13 @@ Never commit `.env.local`, never prefix `GEMINI_API_KEY` with `NEXT_PUBLIC_`, an
 
 ## ScienceWerx Connect
 
-ScienceWerx apps (Prism School, iStartup, FounderFit, InkKeep, InkGuard) each keep their own database and sign-in, and share a small summary of the same person **server to server**, matched by **verified email**. An app only ever asks about the person signed in to it right now; there is no listing or search of other people. Browsers never call a peer: they call their own app's `/api/connect/peers`.
+ScienceWerx apps (PrismScore, iStartup, FounderFit, InkKeep, InkGuard) each keep their own database and sign-in, and share a small summary of the same person **server to server**, matched by **verified email**. An app only ever asks about the person signed in to it right now; there is no listing or search of other people. Browsers never call a peer: they call their own app's `/api/connect/peers`.
 
 **FounderFit as a provider.** `GET /api/connect/v1/summary` with `Authorization: Bearer swc_…` and `X-Connect-Subject: person@example.com`. The key's SHA-256 must match a `CONNECT_CALLERS` entry with the `summary` scope (401/403 otherwise; 400 for a malformed subject). The subject's Firebase account must exist with a verified email and have at least one assessment, otherwise the answer is `200 {"found": false}`. The card shows the latest assessment's FFI score and band (plus validity when not clean), its date, and up to five lines: venture, candidate, strongest area, biggest gap, fit pattern. The narrative and the raw report are never returned. Calls are logged with the caller name and a hash of the subject, never the email.
 
 The provider does **not** check FounderFit's allowlist (`FOUNDERFIT_ALLOWED_*`). The allowlist decides who may use FounderFit; a Connect summary is the person reading their own existing result inside another ScienceWerx app that has already verified their email, and it grants no access to FounderFit itself.
 
-**FounderFit as a consumer.** `GET /api/connect/peers` needs a Firebase ID token whose email is verified and on the allowlist. It calls iStartup's summary and Prism School's and iStartup's certificates in parallel (4 s timeout each, redirects not followed), checks and caps every field, and returns `{ cards, certificates }`. A peer that is unconfigured, down, slow or refusing is just missing. The "Connected apps" panel on the home screen shows the result and is hidden when there is nothing.
+**FounderFit as a consumer.** `GET /api/connect/peers` needs a Firebase ID token whose email is verified and on the allowlist. It calls iStartup's summary and PrismScore's and iStartup's certificates in parallel (4 s timeout each, redirects not followed), checks and caps every field, and returns `{ cards, certificates }`. A peer that is unconfigured, down, slow or refusing is just missing. The "Connected apps" panel on the home screen shows the result and is hidden when there is nothing.
 
 **Setup.** Generate this app's key and give its SHA-256 to the apps that should accept it:
 

@@ -8,7 +8,7 @@ const MONO = "var(--font-ibm-plex-mono), 'IBM Plex Mono', monospace";
 
 const APP_NAMES: Record<string, string> = {
   istartup: "iStartup",
-  prismscore: "Prism School",
+  prismscore: "PrismScore",
   founderfit: "FounderFit",
   inkeep: "InkKeep",
   inkguard: "InkGuard",
